@@ -1,0 +1,78 @@
+#!/bin/sh
+# Secret guard. Checks the STAGED content (index), never the working copy.
+# Refuses the commit when the staged set contains:
+#   (a) any path under docs/
+#   (b) any .env* file other than .env.example
+#   (c) a private key block
+#   (d) an env-style line (NAME=value) giving a non-empty value to a name that
+#       contains PASSWORD, SECRET or TOKEN, or ends in _KEY ("" and null are empty)
+# Messages name the file and the rule, never the value.
+
+fail=0
+refuse() {
+    printf 'pre-commit: REFUSED %s: %s\n' "$1" "$2" >&2
+    fail=1
+}
+
+# Prints "NAME (line N)" for each env-style line on stdin that gives a non-empty
+# value to a secret-named variable. Never prints the value.
+secret_lines() {
+    grep -nE '^[[:space:]]*(#[[:space:]]*)?(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=' \
+    | while IFS= read -r line; do
+        num=${line%%:*}
+        stmt=$(printf '%s\n' "${line#*:}" | sed -E 's/^[[:space:]]*(#[[:space:]]*)?(export[[:space:]]+)?//')
+        name=$(printf '%s\n' "${stmt%%=*}" | sed -E 's/[[:space:]]+$//')
+        uname=$(printf '%s\n' "$name" | tr '[:lower:]' '[:upper:]')
+        case "$uname" in
+            *PASSWORD*|*SECRET*|*TOKEN*|*_KEY) ;;
+            *) continue ;;
+        esac
+        value=$(printf '%s\n' "${stmt#*=}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/^#.*$//; s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/')
+        lvalue=$(printf '%s\n' "$value" | tr '[:upper:]' '[:lower:]')
+        if [ -n "$value" ] && [ "$lvalue" != "null" ]; then
+            printf '%s (line %s)\n' "$name" "$num"
+        fi
+    done
+}
+
+files=$(git diff --cached --name-only --diff-filter=ACMRT)
+[ -z "$files" ] && exit 0
+
+nl='
+'
+oldifs=$IFS
+IFS=$nl
+for f in $files; do
+    IFS=$oldifs
+
+    case "$f" in
+        docs/*) refuse "$f" "rule (a) path under docs/"; IFS=$nl; continue ;;
+    esac
+
+    base=${f##*/}
+    case "$base" in
+        .env.example) ;;
+        .env*) refuse "$f" "rule (b) .env* file other than .env.example"; IFS=$nl; continue ;;
+    esac
+
+    if git show ":$f" 2>/dev/null | grep -qE -e '-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----'; then
+        refuse "$f" "rule (c) private key block"
+    fi
+
+    hits=$(git show ":$f" 2>/dev/null | secret_lines)
+    if [ -n "$hits" ]; then
+        printf '%s\n' "$hits" | while IFS= read -r h; do
+            printf 'pre-commit: REFUSED %s: rule (d) non-empty value for secret-named variable %s\n' "$f" "$h" >&2
+        done
+        fail=1
+    fi
+
+    IFS=$nl
+done
+IFS=$oldifs
+
+if [ "$fail" -ne 0 ]; then
+    echo "pre-commit: commit refused by the secret guard (.githooks/pre-commit)." >&2
+    exit 1
+fi
+exit 0
