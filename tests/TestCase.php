@@ -4,6 +4,7 @@ namespace Tests;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
+use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
 abstract class TestCase extends BaseTestCase
@@ -11,6 +12,17 @@ abstract class TestCase extends BaseTestCase
     use RefreshDatabase {
         refreshDatabase as baseRefreshDatabase;
         migrateFreshUsing as baseMigrateFreshUsing;
+    }
+
+    /**
+     * No test ever reaches the network: the live AODB is called only on the
+     * server (R8). Every HTTP call must match an Http::fake().
+     */
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Http::preventStrayRequests();
     }
 
     /**

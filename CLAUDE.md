@@ -79,10 +79,31 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
 - Absent field = null; its disappearance is a change event. A flight that leaves the feed
   gets 'removed from feed' and is never deleted (D-020).
 - Window membership: reference_time = scheduled, else estimated, else actual
-  (ARR: sibt, eibt, eldt, aibt, aldt; DEP: sobt, etot, aobt, atot). Windows are [from, to)
+  (ARR: sibt, eibt, eldt, aibt, aldt; DEP: sobt, eobt, tobt, etot, aobt, atot). Windows are [from, to)
   in UTC, at most 7 days (D-021).
 - as_of = what the hub knew at that moment (flight_versions.valid_from), not what was true
   then (D-022).
+- Change events: field = the AODB path (eobt, paxDetails.pmr…); arrays compare as one
+  value; absent = null. source aodb for AODB values, correction for corrected served
+  values.
+- Removal: a flight missing from a poll is removed only if one of its OBT/TOT or
+  LDT/IBT times lies at least 60 min inside the window AND /flights/v1/byid does not
+  return it.
+
+## AODB API
+- Innov'ATM "Airport Keeper External API" v3.2.5; spec committed in
+  resources/aodb/openapi-3.2.5.json. Base URL https://api.app.airport-keeper.com
+  (https only); airport HRYR.
+- POST /login {username, password} → the token is in the Authorization RESPONSE header
+  (with or without "Bearer "). Every other call sends Authorization: Bearer <token>.
+- GET /flights/v1/airport?airport=HRYR&from=…&to=… (yyyy-MM-ddTHH:mm:ssZ, both flows): a DEP
+  is in the window if any of its OBT/TOT times is inside; an ARR if any of its LDT/IBT
+  times is inside. GET /flights/v1/byid?airport=HRYR&ids=a,b,… for flights missing from a
+  poll.
+- Never call the live AODB API from this Mac: no credentials exist here (D-003). Every test
+  uses Http::fake() with Http::preventStrayRequests().
+- Never log, print, store unencrypted, or put in an exception message: the AODB password,
+  the token, an Authorization header, or any /login request or response body.
 
 ## Security floor
 - Every permission enforced server-side, deny-by-default, with tests for the refused cases.
