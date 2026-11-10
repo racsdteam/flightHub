@@ -1,10 +1,9 @@
 <?php
 
 /*
- * Runs once before the suite. Stops early when the runtime user's grants do
- * not match config/grants.php, so no test runs against wrong privileges.
- * Locally one runtime user holds the dev and the test database (apply-grants.sh),
- * so both are checked.
+ * Runs once before the suite. Stops early when the test runtime user's grants
+ * do not match config/grants.php for the test database, so no test runs
+ * against wrong privileges.
  */
 
 use App\Database\Grants\GrantComparator;
@@ -31,7 +30,7 @@ $lines = array_map(
 );
 $problems = GrantComparator::compare(
     GrantRegistry::fromConfig(),
-    [$database, substr($database, 0, -strlen('_test'))],
+    $database,
     $lines,
 );
 

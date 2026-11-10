@@ -23,7 +23,9 @@ distributes it to other RAC systems through its own API.
    the instance home can be changed with `FLIGHTHUB_DB_HOME`.
 
 4. Run migrations as the DDL user (never as the runtime user) on both databases, then
-   give the runtime user its per-table grants (config/grants.php):
+   give each runtime user its per-table grants (config/grants.php). Locally, as in
+   production, each runtime user holds exactly one database: `flighthub_app` →
+   `flighthub` (.env), `flighthub_app_test` → `flighthub_test` (.env.testing).
 
        php artisan migrate --database=mariadb_ddl
        php artisan migrate --database=mariadb_ddl --env=testing
@@ -31,6 +33,7 @@ distributes it to other RAC systems through its own API.
 
    After a migration that adds a table: add it to config/grants.php, migrate both
    databases as DDL (the two migrate commands above), then run apply-grants.sh.
+   Verify with `php artisan hub:check-grants` and `php artisan hub:check-grants --env=testing`.
 
 5. Run the tests on PHP 8.3 (Homebrew php@8.3, or set `PHP83_BIN`; MariaDB database
    `flighthub_test`, never SQLite):

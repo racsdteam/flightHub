@@ -9,15 +9,14 @@ use Illuminate\Support\Facades\DB;
 
 class CheckGrantsCommand extends Command
 {
-    protected $signature = 'hub:check-grants
-        {--database=* : Database the runtime user must hold (repeatable; default: the runtime connection\'s database)}';
+    protected $signature = 'hub:check-grants';
 
-    protected $description = "Verify the runtime user's real privileges against config/grants.php";
+    protected $description = "Verify the runtime user's real privileges against config/grants.php for its database";
 
     public function handle(): int
     {
         $connection = DB::connection('mariadb');
-        $databases = array_values(array_unique($this->option('database') ?: [$connection->getDatabaseName()]));
+        $database = $connection->getDatabaseName();
 
         // Raw grant lines contain password hashes: they are parsed, never printed.
         $lines = array_map(
@@ -25,7 +24,7 @@ class CheckGrantsCommand extends Command
             $connection->select('SHOW GRANTS FOR CURRENT_USER()'),
         );
 
-        $problems = GrantComparator::compare(GrantRegistry::fromConfig(), $databases, $lines);
+        $problems = GrantComparator::compare(GrantRegistry::fromConfig(), $database, $lines);
 
         if ($problems !== []) {
             foreach ($problems as $problem) {
@@ -35,7 +34,7 @@ class CheckGrantsCommand extends Command
             return self::FAILURE;
         }
 
-        $this->line('hub:check-grants: runtime grants match config/grants.php for '.implode(', ', $databases).'.');
+        $this->line("hub:check-grants: runtime grants match config/grants.php for {$database}.");
 
         return self::SUCCESS;
     }

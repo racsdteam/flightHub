@@ -36,7 +36,7 @@ class GrantComparatorTest extends TestCase
             'migrations' => [],
         ]);
 
-        return GrantComparator::compare($registry, ['hub_test'], $lines);
+        return GrantComparator::compare($registry, 'hub_test', $lines);
     }
 
     /**

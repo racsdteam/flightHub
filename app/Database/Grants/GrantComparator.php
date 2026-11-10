@@ -12,11 +12,11 @@ final class GrantComparator
     private const IDENT = '`((?:[^`]|``)+)`';
 
     /**
-     * @param  list<string>  $databases  databases the runtime user must hold, each exactly as the registry says
+     * @param  string  $database  the one database the runtime user must hold, exactly as the registry says
      * @param  list<string>  $grantLines  SHOW GRANTS FOR CURRENT_USER() output
      * @return list<string> problems; empty when the grants match
      */
-    public static function compare(GrantRegistry $registry, array $databases, array $grantLines): array
+    public static function compare(GrantRegistry $registry, string $database, array $grantLines): array
     {
         $problems = [];
         $actual = [];
@@ -60,31 +60,29 @@ final class GrantComparator
             }
         }
 
-        foreach ($actual as $db => $tables) {
-            if (! in_array($db, $databases, true)) {
+        foreach (array_keys($actual) as $db) {
+            if ($db !== $database) {
                 $problems[] = "privileges on another database: {$db}";
             }
         }
 
-        foreach ($databases as $db) {
-            $tables = $actual[$db] ?? [];
+        $tables = $actual[$database] ?? [];
 
-            foreach ($tables as $table => $privileges) {
-                if (! in_array($table, $registry->tables(), true)) {
-                    $problems[] = "{$db}.{$table}: privileges on a table not in config/grants.php";
-                }
+        foreach (array_keys($tables) as $table) {
+            if (! in_array($table, $registry->tables(), true)) {
+                $problems[] = "{$database}.{$table}: privileges on a table not in config/grants.php";
             }
+        }
 
-            foreach ($registry->tables() as $table) {
-                $expected = $registry->privilegesFor($table);
-                $have = array_keys($tables[$table] ?? []);
+        foreach ($registry->tables() as $table) {
+            $expected = $registry->privilegesFor($table);
+            $have = array_keys($tables[$table] ?? []);
 
-                foreach (array_diff($expected, $have) as $missing) {
-                    $problems[] = "{$db}.{$table}: missing {$missing}";
-                }
-                foreach (array_diff($have, $expected) as $extra) {
-                    $problems[] = "{$db}.{$table}: extra {$extra}";
-                }
+            foreach (array_diff($expected, $have) as $missing) {
+                $problems[] = "{$database}.{$table}: missing {$missing}";
+            }
+            foreach (array_diff($have, $expected) as $extra) {
+                $problems[] = "{$database}.{$table}: extra {$extra}";
             }
         }
 

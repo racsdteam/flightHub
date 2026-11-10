@@ -55,6 +55,7 @@ FLIGHTHUB_DB_HOME=$FLIGHTHUB_DB_HOME MARIADB_BASEDIR=$MARIADB_BASEDIR sh "$REPO/
 gen_pw() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32; }
 ddl_pw=$(gen_pw)
 app_pw=$(gen_pw)
+app_test_pw=$(gen_pw)
 
 echo "init: creating databases and users"
 "$MARIADB_BASEDIR/bin/mariadb" --defaults-file="$CNF" --protocol=socket <<EOF
@@ -64,6 +65,7 @@ CREATE USER 'flighthub_ddl'@'127.0.0.1' IDENTIFIED BY '$ddl_pw';
 GRANT ALL PRIVILEGES ON \`flighthub\`.* TO 'flighthub_ddl'@'127.0.0.1';
 GRANT ALL PRIVILEGES ON \`flighthub_test\`.* TO 'flighthub_ddl'@'127.0.0.1';
 CREATE USER 'flighthub_app'@'127.0.0.1' IDENTIFIED BY '$app_pw';
+CREATE USER 'flighthub_app_test'@'127.0.0.1' IDENTIFIED BY '$app_test_pw';
 EOF
 
 # set_env FILE KEY: sets KEY to $SET_ENV_VALUE in FILE (replaces or appends).
@@ -77,8 +79,9 @@ set_env() {
     mv "$1.tmp" "$1"
 }
 
-# write_env FILE DATABASE APP_ENV: creates FILE from .env.example (with a new
-# APP_KEY) when missing, then writes the database settings into it.
+# write_env FILE DATABASE APP_ENV RUNTIME_USER RUNTIME_PW: creates FILE from
+# .env.example (with a new APP_KEY) when missing, then writes the database
+# settings into it. Each database has its own runtime user, as in production.
 write_env() {
     if [ ! -e "$1" ]; then
         cp "$REPO/.env.example" "$1"
@@ -90,17 +93,17 @@ write_env() {
     SET_ENV_VALUE=127.0.0.1 set_env "$1" DB_HOST
     SET_ENV_VALUE=$FLIGHTHUB_DB_PORT set_env "$1" DB_PORT
     SET_ENV_VALUE=$2 set_env "$1" DB_DATABASE
-    SET_ENV_VALUE=flighthub_app set_env "$1" DB_USERNAME
-    SET_ENV_VALUE=$app_pw set_env "$1" DB_PASSWORD
+    SET_ENV_VALUE=$4 set_env "$1" DB_USERNAME
+    SET_ENV_VALUE=$5 set_env "$1" DB_PASSWORD
     SET_ENV_VALUE=flighthub_ddl set_env "$1" DB_DDL_USERNAME
     SET_ENV_VALUE=$ddl_pw set_env "$1" DB_DDL_PASSWORD
 }
 
 umask 077
-write_env "$REPO/.env" flighthub local
-write_env "$REPO/.env.testing" flighthub_test testing
+write_env "$REPO/.env" flighthub local flighthub_app "$app_pw"
+write_env "$REPO/.env.testing" flighthub_test testing flighthub_app_test "$app_test_pw"
 
 echo "init: done. Databases flighthub and flighthub_test on 127.0.0.1:$FLIGHTHUB_DB_PORT;"
 echo "init: credentials written to .env and .env.testing (not shown)."
-echo "init: the runtime user has no privileges yet: migrate both databases as DDL, then run"
+echo "init: the runtime users have no privileges yet: migrate both databases as DDL, then run"
 echo "init: scripts/local-db/apply-grants.sh (see README)."

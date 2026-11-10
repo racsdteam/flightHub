@@ -15,16 +15,6 @@ class GrantsRegistryTest extends TestCase
         return DB::connection('mariadb_ddl')->getDatabaseName();
     }
 
-    /**
-     * Locally one runtime user holds the dev and the test database (apply-grants.sh).
-     */
-    private function runtimeDatabases(): array
-    {
-        $test = $this->hubTestDatabase();
-
-        return [$test, substr($test, 0, -strlen('_test'))];
-    }
-
     public function test_every_table_is_in_the_registry_and_vice_versa(): void
     {
         // Read as the DDL user (D-014).
@@ -60,8 +50,8 @@ class GrantsRegistryTest extends TestCase
 
     public function test_check_grants_passes_on_the_test_database(): void
     {
-        $this->artisan('hub:check-grants', ['--database' => $this->runtimeDatabases()])
-            ->expectsOutputToContain('runtime grants match config/grants.php')
+        $this->artisan('hub:check-grants')
+            ->expectsOutputToContain('runtime grants match config/grants.php for '.$this->hubTestDatabase())
             ->doesntExpectOutputToContain('IDENTIFIED')
             ->assertExitCode(0);
     }
@@ -70,7 +60,7 @@ class GrantsRegistryTest extends TestCase
     {
         config(['grants.tables.polls' => ['SELECT', 'INSERT', 'UPDATE']]);
 
-        $this->artisan('hub:check-grants', ['--database' => $this->runtimeDatabases()])
+        $this->artisan('hub:check-grants')
             ->expectsOutputToContain('polls: missing UPDATE')
             ->doesntExpectOutputToContain('IDENTIFIED')
             ->assertExitCode(1);
@@ -80,10 +70,12 @@ class GrantsRegistryTest extends TestCase
     {
         $db = $this->hubTestDatabase();
 
-        $this->artisan('hub:grants-sql', ['--database' => [$db], '--host' => 'localhost'])
-            ->expectsOutputToContain("REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'flighthub_app'@'localhost';")
-            ->expectsOutputToContain("GRANT INSERT, SELECT ON `{$db}`.`polls` TO 'flighthub_app'@'localhost';")
-            ->expectsOutputToContain("GRANT INSERT, SELECT, UPDATE ON `{$db}`.`flights` TO 'flighthub_app'@'localhost';")
+        $user = config('database.connections.mariadb.username');
+
+        $this->artisan('hub:grants-sql', ['--host' => 'localhost'])
+            ->expectsOutputToContain("REVOKE ALL PRIVILEGES, GRANT OPTION FROM '{$user}'@'localhost';")
+            ->expectsOutputToContain("GRANT INSERT, SELECT ON `{$db}`.`polls` TO '{$user}'@'localhost';")
+            ->expectsOutputToContain("GRANT INSERT, SELECT, UPDATE ON `{$db}`.`flights` TO '{$user}'@'localhost';")
             ->assertExitCode(0);
     }
 
@@ -93,7 +85,7 @@ class GrantsRegistryTest extends TestCase
         unset($tables['change_events']);
         config(['grants.tables' => $tables]);
 
-        $this->artisan('hub:grants-sql', ['--database' => [$this->hubTestDatabase()]])
+        $this->artisan('hub:grants-sql')
             ->expectsOutputToContain('change_events exists but is not in config/grants.php')
             ->doesntExpectOutputToContain('REVOKE')
             ->assertExitCode(1);
@@ -103,7 +95,7 @@ class GrantsRegistryTest extends TestCase
     {
         config(['grants.tables.not_a_table' => ['SELECT']]);
 
-        $this->artisan('hub:grants-sql', ['--database' => [$this->hubTestDatabase()]])
+        $this->artisan('hub:grants-sql')
             ->expectsOutputToContain('not_a_table is in config/grants.php but does not exist')
             ->assertExitCode(1);
     }

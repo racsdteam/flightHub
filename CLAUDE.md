@@ -61,6 +61,7 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   scripts/local-db/apply-grants.sh. In production Dany pastes hub:grants-sql output as
   root; hub:check-grants verifies.
 - SHOW GRANTS output contains password hashes: never print it raw.
+- Locally, as in production, each runtime user holds exactly one database.
 
 ## Data rules
 - Flight identity = the AODB `id`. Never auto-merge. Suspected duplicates become quality
