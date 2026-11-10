@@ -13,6 +13,9 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   proposals, open questions.
 - Decisions are in docs/DECISIONS.md (git-excluded). Follow them; flag conflicts; never
   change one yourself.
+- The report lists every deviation from the prompt, however small, including anything
+  added. Claim 'matches the spec' only after checking.
+- Tests count only when run with composer test (PHP 8.3).
 
 ## Secrets
 - Secrets live only in .env on the server. Never read, print, grep, summarise or copy any
@@ -30,9 +33,10 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
 ## Production target
 - Laravel 12, PHP 8.3 (/usr/local/bin/ea-php83): no PHP 8.4+ syntax. MariaDB 10.11.19.
   AlmaLinux / cPanel / CloudLinux, dedicated server at AOS.
-- No Node and no SSH on the server. Deploy: maintenance on → git pull → migrate as DDL user
-  → caches (route cache allowed: served at the subdomain root) → preflight → up.
-  Nothing is built on the server; compiled CSS is committed.
+- No Node and no SSH on the server. Deploy: maintenance on → git pull → composer install
+  --no-dev → migrate as DDL user → grants (Dany, as root, when tables changed) → caches
+  (route cache allowed: served at the subdomain root) → preflight → up.
+  No Node anywhere: CSS is hand-written and committed (D-018).
 - cPanel cron runs the scheduler every minute. No daemons, no long-running queue workers.
   Scheduled commands use withoutOverlapping and finish well inside their interval.
 - App commands run as the cPanel account user, never root.

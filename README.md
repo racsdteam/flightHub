@@ -26,6 +26,7 @@ distributes it to other RAC systems through its own API.
 
        php artisan migrate --database=mariadb_ddl
 
-5. Run the tests (MariaDB database `flighthub_test`, never SQLite):
+5. Run the tests on PHP 8.3 (Homebrew php@8.3, or set `PHP83_BIN`; MariaDB database
+   `flighthub_test`, never SQLite):
 
-       php artisan test
+       composer test
