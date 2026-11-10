@@ -22,9 +22,15 @@ distributes it to other RAC systems through its own API.
    Binaries come from `MARIADB_BASEDIR` (default `/opt/homebrew/opt/mariadb@10.11`);
    the instance home can be changed with `FLIGHTHUB_DB_HOME`.
 
-4. Run migrations as the DDL user (never as the runtime user):
+4. Run migrations as the DDL user (never as the runtime user) on both databases, then
+   give the runtime user its per-table grants (config/grants.php):
 
        php artisan migrate --database=mariadb_ddl
+       php artisan migrate --database=mariadb_ddl --env=testing
+       scripts/local-db/apply-grants.sh
+
+   After a migration that adds a table: add it to config/grants.php, migrate both
+   databases as DDL (the two migrate commands above), then run apply-grants.sh.
 
 5. Run the tests on PHP 8.3 (Homebrew php@8.3, or set `PHP83_BIN`; MariaDB database
    `flighthub_test`, never SQLite):

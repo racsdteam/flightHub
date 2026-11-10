@@ -64,8 +64,6 @@ CREATE USER 'flighthub_ddl'@'127.0.0.1' IDENTIFIED BY '$ddl_pw';
 GRANT ALL PRIVILEGES ON \`flighthub\`.* TO 'flighthub_ddl'@'127.0.0.1';
 GRANT ALL PRIVILEGES ON \`flighthub_test\`.* TO 'flighthub_ddl'@'127.0.0.1';
 CREATE USER 'flighthub_app'@'127.0.0.1' IDENTIFIED BY '$app_pw';
-GRANT SELECT, INSERT, UPDATE, DELETE ON \`flighthub\`.* TO 'flighthub_app'@'127.0.0.1';
-GRANT SELECT, INSERT, UPDATE, DELETE ON \`flighthub_test\`.* TO 'flighthub_app'@'127.0.0.1';
 EOF
 
 # set_env FILE KEY: sets KEY to $SET_ENV_VALUE in FILE (replaces or appends).
@@ -104,3 +102,5 @@ write_env "$REPO/.env.testing" flighthub_test testing
 
 echo "init: done. Databases flighthub and flighthub_test on 127.0.0.1:$FLIGHTHUB_DB_PORT;"
 echo "init: credentials written to .env and .env.testing (not shown)."
+echo "init: the runtime user has no privileges yet: migrate both databases as DDL, then run"
+echo "init: scripts/local-db/apply-grants.sh (see README)."

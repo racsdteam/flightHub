@@ -53,6 +53,14 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
 - Tests run on MariaDB (flighthub_test), never SQLite; migrations as DDL, queries as runtime.
 - Local DB: the hub's own instance (scripts/local-db/, data in ~/mariadb-flighthub).
   Never touch ~/mariadb-kia data or KIA PULSE's databases.
+- History tables (append-only): polls, raw_responses (DELETE only after 90 days, by
+  trigger), flight_versions, change_events. Never write code or a migration that updates
+  or deletes their rows; if ever needed, it is Dany's decision first.
+- Every table has an entry in config/grants.php (deny-by-default). After a migration that
+  adds a table: migrate flighthub and flighthub_test as DDL, then
+  scripts/local-db/apply-grants.sh. In production Dany pastes hub:grants-sql output as
+  root; hub:check-grants verifies.
+- SHOW GRANTS output contains password hashes: never print it raw.
 
 ## Data rules
 - Flight identity = the AODB `id`. Never auto-merge. Suspected duplicates become quality
@@ -67,6 +75,13 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
 - Data-quality thresholds (minutes): no actual after schedule 30; actual vs schedule gap 60;
   still IN_FLIGHT after estimate 30. Quality flags only — delay classification belongs to
   consumers or a computed field.
+- Absent field = null; its disappearance is a change event. A flight that leaves the feed
+  gets 'removed from feed' and is never deleted (D-020).
+- Window membership: reference_time = scheduled, else estimated, else actual
+  (ARR: sibt, eibt, eldt, aibt, aldt; DEP: sobt, etot, aobt, atot). Windows are [from, to)
+  in UTC, at most 7 days (D-021).
+- as_of = what the hub knew at that moment (flight_versions.valid_from), not what was true
+  then (D-022).
 
 ## Security floor
 - Every permission enforced server-side, deny-by-default, with tests for the refused cases.
