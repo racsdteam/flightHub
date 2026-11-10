@@ -14,7 +14,7 @@ final class ReferenceTime
 {
     public const ORDER = [
         'ARR' => ['sibt', 'eibt', 'eldt', 'aibt', 'aldt'],
-        'DEP' => ['sobt', 'etot', 'aobt', 'atot'],
+        'DEP' => ['sobt', 'eobt', 'tobt', 'etot', 'aobt', 'atot'],
     ];
 
     private function __construct(

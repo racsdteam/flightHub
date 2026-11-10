@@ -150,6 +150,7 @@ class AsOfBenchmarkTest extends TestCase
             foreach (array_chunk($flights, 1000) as $chunk) {
                 $ddl->table('flights')->insert(array_map(fn ($f) => [
                     'aodb_id' => sprintf('BENCH-%02d-%02d', $f[0], $f[1]),
+                    'record' => '{}',
                     'flow' => $f[1] % 2 ? 'ARR' : 'DEP',
                     'full_flight_number' => sprintf('XX%03d', $f[1]),
                     'reference_time' => $f[2]->modify($f[1] % 10 === 0 ? '+3 hours' : '+0 hours')->format($fmt),
@@ -175,6 +176,7 @@ class AsOfBenchmarkTest extends TestCase
                         'version_no' => $v + 1,
                         'valid_from' => $base->modify(sprintf('-48 hours +%d minutes', $v * 100))->format('Y-m-d H:i:s.u'),
                         'cause' => 'aodb',
+                        'record' => '{}',
                         'flow' => $arr ? 'ARR' : 'DEP',
                         'full_flight_number' => sprintf('XX%03d', $i),
                         'reg' => sprintf('9XR-%02d', $i),

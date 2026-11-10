@@ -29,6 +29,7 @@ class FlightQueryAsOfTest extends TestCase
     {
         return DB::table('flights')->insertGetId([
             'aodb_id' => $aodbId,
+            'record' => '{}',
             'reference_time' => $referenceTime,
             'first_seen_at' => '2026-10-27 00:00:00',
             'last_seen_at' => '2026-10-29 00:00:00',
@@ -42,6 +43,7 @@ class FlightQueryAsOfTest extends TestCase
             'version_no' => $no,
             'valid_from' => $validFrom,
             'cause' => 'aodb',
+            'record' => '{}',
             'reference_time' => $referenceTime,
             'reference_time_source' => $referenceTime === null ? null : 'sobt',
             'in_feed' => true,

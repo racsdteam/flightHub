@@ -21,6 +21,9 @@ return [
         'flight_versions' => ['SELECT', 'INSERT'],
         'change_events' => ['SELECT', 'INSERT'],
 
+        // Reviewed corrections; editing comes with the admin screens.
+        'airport_code_corrections' => ['SELECT'],
+
         'cache' => ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
         'cache_locks' => ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
         'sessions' => ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],

@@ -28,6 +28,8 @@ class HistoryProtectionTest extends TestCase
         $poll = $db->table('polls')->insertGetId([
             'started_at' => '2026-10-29 05:00:00.000000',
             'finished_at' => '2026-10-29 05:00:01.250000',
+            'request_window_from' => '2026-10-27 22:00:00',
+            'request_window_to' => '2026-10-30 22:00:00',
             'duration_ms' => 1250,
             'outcome' => 'ok',
             'http_status' => 200,
@@ -48,6 +50,7 @@ class HistoryProtectionTest extends TestCase
         ]);
         $flight = $db->table('flights')->insertGetId([
             'aodb_id' => 'TEST-'.bin2hex(random_bytes(4)),
+            'record' => '{}',
             'flow' => 'DEP',
             'full_flight_number' => 'WB452',
             'sobt' => '2026-10-29 07:40:00',
@@ -62,6 +65,7 @@ class HistoryProtectionTest extends TestCase
             'valid_from' => '2026-10-29 05:00:01.000000',
             'poll_id' => $poll,
             'cause' => 'aodb',
+            'record' => '{}',
             'flow' => 'DEP',
             'full_flight_number' => 'WB452',
             'sobt' => '2026-10-29 07:40:00',
