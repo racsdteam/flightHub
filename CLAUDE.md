@@ -93,6 +93,14 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
 - Removal: a flight missing from a poll is removed only if one of its OBT/TOT or
   LDT/IBT times lies at least 60 min inside the window AND /flights/v1/byid does not
   return it.
+- Hub-owned fields use the "hub." prefix in change events (hub.sameAs); their values are
+  aodb_ids, never internal ids.
+- GHR contact stripping (D-035): ghrOperatorDetails email, phone, address, zipcode and city
+  are removed before a record is stored, compared or put in an event; name and id stay;
+  raw responses keep them for 90 days.
+- Quality flags have a state (open / cleared, set by the hub) and a resolution (fixed,
+  ignored, reported, same_as — set by a person). Flags are never deleted; their history is
+  quality_flag_events (append-only).
 
 ## AODB API
 - Innov'ATM "Airport Keeper External API" v3.2.5; spec committed in

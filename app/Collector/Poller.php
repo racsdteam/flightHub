@@ -8,6 +8,7 @@ use App\Aodb\AodbResponse;
 use App\Aodb\AodbSpec;
 use App\Aodb\CanonicalJson;
 use App\Flights\Window;
+use App\Quality\QualityEvaluator;
 use Carbon\CarbonImmutable;
 use Closure;
 use Illuminate\Support\Facades\DB;
@@ -21,6 +22,8 @@ use Throwable;
  * Every attempt ends with exactly one polls row. Unchanged content touches
  * last_seen_at only. Changed content is written in ONE transaction holding
  * GET_LOCK('flighthub_change_events'), so change_events ids commit in order.
+ * After an ok poll (changed or not) the quality rules run in their own
+ * transaction.
  */
 final class Poller
 {
@@ -56,6 +59,7 @@ final class Poller
     public function __construct(
         private readonly Closure $client,
         private readonly int $lockTimeout = 10,
+        private readonly QualityEvaluator $quality = new QualityEvaluator,
     ) {}
 
     /**
@@ -88,7 +92,7 @@ final class Poller
         }
 
         try {
-            return $this->poll();
+            $result = $this->poll();
         } catch (AodbConfigurationException $e) {
             return $this->finish(AodbResponse::CONFIG_ERROR, $e->getMessage());
         } catch (Throwable $e) {
@@ -97,6 +101,13 @@ final class Poller
             $this->finish('internal_error', class_basename($e));
             throw $e;
         }
+
+        // Some rules depend on the clock: evaluate after every ok poll, changed or not.
+        if ($result['outcome'] === AodbResponse::OK) {
+            $result['quality'] = $this->quality->evaluate($this->window, CarbonImmutable::now('UTC'));
+        }
+
+        return $result;
     }
 
     /**
@@ -117,6 +128,7 @@ final class Poller
         $client = ($this->client)();
         $response = $client->flightsAtAirport($this->window);
         $this->observedAt = CarbonImmutable::now('UTC');
+        $this->warnFrom($response);
         $this->poll['http_status'] = $response->httpStatus;
 
         // Not 2xx: the outcome only; the body is never stored.
@@ -242,6 +254,7 @@ final class Poller
         $answers = [];
         foreach (array_chunk($missing, max(1, (int) config('aodb.byid_chunk'))) as $chunk) {
             $response = $client->flightsById($chunk);
+            $this->warnFrom($response);
             $answers[] = ['response' => $response, 'ids' => $chunk];
             if (! $response->isOk()) {
                 $this->warn('byid_failed', null, (string) $response->error);
@@ -368,7 +381,8 @@ final class Poller
     private function planSeen(object $current, NormalisedFlight $flight): ?array
     {
         $events = [];
-        $old = CanonicalJson::leaves(CanonicalJson::decode($current->record));
+        // Both sides stripped (D-035): a stripped field never produces an event.
+        $old = CanonicalJson::leaves(FlightNormaliser::stripContacts(CanonicalJson::decode($current->record)));
         $new = CanonicalJson::leaves(CanonicalJson::decode($flight->columns['record']));
         $paths = array_unique([...array_keys($old), ...array_keys($new)]);
         sort($paths, SORT_STRING);
@@ -460,6 +474,8 @@ final class Poller
 
         $versionId = DB::table('flight_versions')->insertGetId($plan['columns'] + [
             'flight_id' => $flightId,
+            // Hub-owned served value: carried over, changed only by a resolution.
+            'same_as_flight_id' => $current?->same_as_flight_id,
             'version_no' => $versionNo,
             'valid_from' => $at,
             'poll_id' => $pollId,
@@ -551,6 +567,13 @@ final class Poller
     {
         if ($ids !== []) {
             DB::table('flights')->whereIn('aodb_id', $ids)->update(['last_seen_at' => $this->observedAt->format('Y-m-d H:i:s.u')]);
+        }
+    }
+
+    private function warnFrom(AodbResponse $response): void
+    {
+        foreach ($response->warnings as $warning) {
+            $this->warn($warning['code'], null, $warning['detail'] ?? null);
         }
     }
 

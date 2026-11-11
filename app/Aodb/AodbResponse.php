@@ -33,6 +33,7 @@ final class AodbResponse
     /**
      * @param  list<stdClass>|null  $flights  the "flights" array (each entry as decoded); null unless outcome ok
      * @param  mixed  $payload  the whole decoded body (2xx and JSON only), for the canonical hash
+     * @param  list<array{code: string, detail?: string}>  $warnings  for polls.warnings; never secrets
      */
     private function __construct(
         public readonly string $outcome,
@@ -42,6 +43,7 @@ final class AodbResponse
         public readonly ?array $flights = null,
         public readonly ?string $error = null,
         public readonly mixed $payload = null,
+        public readonly array $warnings = [],
     ) {}
 
     /**
@@ -89,6 +91,14 @@ final class AodbResponse
         $key = self::errorKey($body);
 
         return $key === null ? (string) $status : "{$status} {$key}";
+    }
+
+    /**
+     * @param  array{code: string, detail?: string}  $warning
+     */
+    public function withWarning(array $warning): self
+    {
+        return new self($this->outcome, $this->endpoint, $this->httpStatus, $this->body, $this->flights, $this->error, $this->payload, [...$this->warnings, $warning]);
     }
 
     public function isOk(): bool

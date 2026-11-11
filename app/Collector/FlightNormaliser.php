@@ -16,6 +16,7 @@ use stdClass;
  * poll carries on (D-027). Twins <field>_aodb hold the value as received;
  * served columns equal the twins, then airport_code_corrections apply to
  * adepIata / adesIata, also filling the ICAO code when the record has none.
+ * GHR operator contact details are stripped before anything else (D-035).
  */
 final class FlightNormaliser
 {
@@ -68,6 +69,9 @@ final class FlightNormaliser
         'pax_capa' => ['pax_capa_aodb', 'paxCapa'],
     ];
 
+    /** ghrOperatorDetails keys removed at ingest (D-035); name and id stay. */
+    public const STRIPPED_GHR_FIELDS = ['email', 'phone', 'address', 'zipcode', 'city'];
+
     /** Airport sides a correction applies to: IATA served column → ICAO served column. */
     private const CORRECTED_SIDES = ['adep_iata' => 'adep_icao', 'ades_iata' => 'ades_icao'];
 
@@ -84,8 +88,25 @@ final class FlightNormaliser
      */
     public function __construct(private readonly array $corrections) {}
 
+    /**
+     * A copy of the record without the GHR operator contact details (D-035),
+     * before it is stored, compared or put in an event. Raw responses keep them.
+     */
+    public static function stripContacts(stdClass $record): stdClass
+    {
+        $copy = CanonicalJson::decode(CanonicalJson::encode($record));
+        if (isset($copy->ghrOperatorDetails) && $copy->ghrOperatorDetails instanceof stdClass) {
+            foreach (self::STRIPPED_GHR_FIELDS as $field) {
+                unset($copy->ghrOperatorDetails->{$field});
+            }
+        }
+
+        return $copy;
+    }
+
     public function normalise(stdClass $record): NormalisedFlight
     {
+        $record = self::stripContacts($record);
         $columns = ['record' => CanonicalJson::encode($record)];
 
         foreach (self::COLUMNS as $column => [$path, $type, $max]) {

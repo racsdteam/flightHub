@@ -16,6 +16,12 @@ final class AodbSpec
     /** @var array<string, true>|null */
     private static ?array $flightPaths = null;
 
+    /** @var array<string, array{pattern: string, items: bool}>|null */
+    private static ?array $patterns = null;
+
+    /** @var array<string, mixed>|null */
+    private static ?array $schemas = null;
+
     /**
      * @return array<string, true> dotted path → true
      */
@@ -25,16 +31,83 @@ final class AodbSpec
             return self::$flightPaths;
         }
 
+        $schemas = self::schemas();
+        $paths = [];
+        self::walk($schemas, $schemas['FlightDto'], '', $paths, []);
+
+        return self::$flightPaths = $paths;
+    }
+
+    /**
+     * Fields the spec gives a pattern for, nested objects included: dotted
+     * path → [pattern, items]. items = true when the pattern applies to each
+     * string of an array (codeShare.flightNumbers).
+     *
+     * @return array<string, array{pattern: string, items: bool}>
+     */
+    public static function patterns(): array
+    {
+        if (self::$patterns !== null) {
+            return self::$patterns;
+        }
+
+        $schemas = self::schemas();
+        $patterns = [];
+        self::walkPatterns($schemas, $schemas['FlightDto'], '', $patterns, []);
+
+        return self::$patterns = $patterns;
+    }
+
+    /**
+     * Top-level fields FlightDto marks required.
+     *
+     * @return list<string>
+     */
+    public static function requiredFlightFields(): array
+    {
+        return array_values(self::schemas()['FlightDto']['required'] ?? []);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function schemas(): array
+    {
+        if (self::$schemas !== null) {
+            return self::$schemas;
+        }
+
         $document = json_decode((string) file_get_contents(resource_path(self::FILE)), true);
         $schemas = $document['components']['schemas'] ?? null;
         if (! is_array($schemas) || ! isset($schemas['FlightDto'])) {
             throw new RuntimeException('FlightDto not found in '.self::FILE);
         }
 
-        $paths = [];
-        self::walk($schemas, $schemas['FlightDto'], '', $paths, []);
+        return self::$schemas = $schemas;
+    }
 
-        return self::$flightPaths = $paths;
+    /**
+     * @param  array<string, array{pattern: string, items: bool}>  $patterns
+     * @param  list<string>  $seen
+     */
+    private static function walkPatterns(array $schemas, array $schema, string $prefix, array &$patterns, array $seen): void
+    {
+        foreach ($schema['properties'] ?? [] as $name => $property) {
+            $path = $prefix.$name;
+            if (isset($property['pattern'])) {
+                $patterns[$path] = ['pattern' => $property['pattern'], 'items' => false];
+            } elseif (($property['type'] ?? null) === 'array' && isset($property['items']['pattern'])) {
+                $patterns[$path] = ['pattern' => $property['items']['pattern'], 'items' => true];
+            }
+
+            $ref = $property['$ref'] ?? null;
+            if (is_string($ref)) {
+                $target = substr($ref, strrpos($ref, '/') + 1);
+                if (isset($schemas[$target]['properties']) && ! in_array($target, $seen, true)) {
+                    self::walkPatterns($schemas, $schemas[$target], $path.'.', $patterns, [...$seen, $target]);
+                }
+            }
+        }
     }
 
     public static function isDocumented(string $path): bool

@@ -24,6 +24,10 @@ return [
         // Reviewed corrections; editing comes with the admin screens.
         'airport_code_corrections' => ['SELECT'],
 
+        // Quality flags: current state, never deleted; their events are append-only.
+        'quality_flags' => ['SELECT', 'INSERT', 'UPDATE'],
+        'quality_flag_events' => ['SELECT', 'INSERT'],
+
         'cache' => ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
         'cache_locks' => ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
         'sessions' => ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],

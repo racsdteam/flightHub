@@ -28,6 +28,11 @@ class PollCommand extends Command
             $poll['content_changed'] ? '' : ' (content unchanged)',
         ));
 
+        if (isset($poll['quality'])) {
+            $q = $poll['quality'];
+            $this->line("hub:poll: quality: {$q['evaluated']} flights evaluated, {$q['detected']} detected, {$q['reopened']} reopened, {$q['cleared']} cleared");
+        }
+
         // Every handled outcome exits 0 (cron must not mail every minute); it lives in polls.
         return self::SUCCESS;
     }

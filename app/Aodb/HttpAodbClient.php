@@ -24,7 +24,8 @@ use Throwable;
  * a placeholder instead.
  *
  * HTTP 429 on any call (login included) pauses every request until
- * Retry-After, or for 5 minutes without one (rate limiting is not documented).
+ * Retry-After (capped at 60 minutes), or for 5 minutes without one (rate
+ * limiting is not documented).
  */
 final class HttpAodbClient implements AodbClient
 {
@@ -35,6 +36,8 @@ final class HttpAodbClient implements AodbClient
     public const RATE_LIMIT_KEY = 'aodb.rate_limited_until';
 
     private const RATE_LIMIT_DEFAULT_SECONDS = 300;
+
+    private const RATE_LIMIT_MAX_SECONDS = 3600;
 
     /** 401 keys after which one re-login and one retry are tried. */
     private const RELOGIN_KEYS = ['TOKEN_EXPIRED', 'NO_TOKEN', 'USER_NOT_LOGGED', 'WRONG_TOKEN_FORMAT'];
@@ -228,7 +231,8 @@ final class HttpAodbClient implements AodbClient
     }
 
     /**
-     * Pause every request until Retry-After (seconds or an HTTP date), else 5 minutes.
+     * Pause every request until Retry-After (seconds or an HTTP date), else 5
+     * minutes. A pause longer than 60 minutes is capped, with a warning.
      */
     private function rateLimit(string $path, Response $response): AodbResponse
     {
@@ -245,11 +249,20 @@ final class HttpAodbClient implements AodbClient
             }
         }
 
+        $asked = $until - $now;
+        if ($asked > self::RATE_LIMIT_MAX_SECONDS) {
+            $until = $now + self::RATE_LIMIT_MAX_SECONDS;
+        }
+
         if ($until > $now) {
             Cache::put(self::RATE_LIMIT_KEY, $until, $until - $now);
         }
 
-        return AodbResponse::fromFailure(AodbResponse::RATE_LIMITED, $path, 429, $response->body());
+        $result = AodbResponse::fromFailure(AodbResponse::RATE_LIMITED, $path, 429, $response->body());
+
+        return $asked > self::RATE_LIMIT_MAX_SECONDS
+            ? $result->withWarning(['code' => 'rate_limit_capped', 'detail' => (string) $asked])
+            : $result;
     }
 
     private function connectionFailure(string $path, ConnectionException $e): AodbResponse

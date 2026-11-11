@@ -402,6 +402,37 @@ class HttpAodbClientTest extends TestCase
         $this->assertSame('ok', $this->client()->flightsAtAirport($this->window())->outcome);
     }
 
+    public function test_retry_after_above_60_minutes_is_capped_with_a_warning(): void
+    {
+        Http::fake([
+            self::LOGIN => self::loginOk(self::jwt()),
+            self::AIRPORT => Http::sequence()->pushResponse(Http::response('', 429, ['Retry-After' => '7200']))->push(['flights' => []]),
+        ]);
+
+        $first = $this->client()->flightsAtAirport($this->window());
+        $this->assertSame('rate_limited', $first->outcome);
+        $this->assertSame([['code' => 'rate_limit_capped', 'detail' => '7200']], $first->warnings);
+
+        $this->travel(3599)->seconds();
+        $this->assertSame('rate_limited', $this->client()->flightsAtAirport($this->window())->outcome);
+
+        $this->travel(2)->seconds();
+        $this->assertSame('ok', $this->client()->flightsAtAirport($this->window())->outcome);
+    }
+
+    public function test_capped_retry_after_warning_reaches_the_poll(): void
+    {
+        $this->app->forgetInstance(AodbClient::class);
+        $until = now()->addHours(3);
+        Http::fake([self::LOGIN => self::loginOk(self::jwt()), self::AIRPORT => Http::response('', 429, ['Retry-After' => $until->format(DATE_RFC7231)])]);
+
+        $this->artisan('hub:poll')->run();
+
+        $poll = DB::table('polls')->sole();
+        $this->assertSame('rate_limited', $poll->outcome);
+        $this->assertSame([['code' => 'rate_limit_capped', 'detail' => '10800']], json_decode($poll->warnings, true));
+    }
+
     public function test_429_on_login_pauses_without_login_back_off(): void
     {
         Http::fake([self::LOGIN => Http::response('', 429, ['Retry-After' => '60'])]);
