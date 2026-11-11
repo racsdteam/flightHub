@@ -8,38 +8,34 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
- * E6: the runtime user may only read the reference tables (editing comes with
- * the screens; rows are added by migrations after Dany's review).
+ * The runtime user edits reference data through the screens (batch 6b): it may
+ * read, insert and update the reference tables, never delete (deactivate).
  */
 class ReferenceTablesProtectionTest extends TestCase
 {
-    public static function refusals(): array
+    public static function tables(): array
     {
         return [
-            'INSERT aircraft_types' => ['INSERT', "INSERT INTO aircraft_types (airline_iata, ac_type_iata, reviewed_by, reviewed_on) VALUES ('WB', 'DH8', 'x', '2026-11-11')"],
-            'UPDATE aircraft_types' => ['UPDATE', "UPDATE aircraft_types SET wtc = 'M' WHERE id = 0"],
-            'DELETE aircraft_types' => ['DELETE', 'DELETE FROM aircraft_types WHERE id = 0'],
-            'INSERT stands' => ['INSERT', "INSERT INTO stands (code, reviewed_by, reviewed_on) VALUES ('A9', 'x', '2026-11-11')"],
-            'UPDATE stands' => ['UPDATE', 'UPDATE stands SET active = 0 WHERE id = 0'],
-            'DELETE stands' => ['DELETE', 'DELETE FROM stands WHERE id = 0'],
+            'airport_code_corrections' => ['airport_code_corrections', ['aodb_value' => 'TST', 'corrected_iata' => 'TST', 'reason' => 'test', 'reviewed_by' => 'x', 'reviewed_on' => '2026-11-11']],
+            'aircraft_types' => ['aircraft_types', ['airline_iata' => 'WB', 'ac_type_iata' => 'DH8', 'reviewed_by' => 'x', 'reviewed_on' => '2026-11-11']],
+            'stands' => ['stands', ['code' => 'A9', 'reviewed_by' => 'x', 'reviewed_on' => '2026-11-11']],
         ];
     }
 
-    #[DataProvider('refusals')]
-    public function test_runtime_is_refused_writes_on_reference_tables(string $verb, string $sql): void
+    #[DataProvider('tables')]
+    public function test_runtime_may_insert_and_update_but_never_delete(string $table, array $row): void
     {
+        $db = DB::connection('mariadb');
+
+        $id = $db->table($table)->insertGetId($row);
+        $this->assertSame(1, $db->table($table)->where('id', $id)->update(['active' => false]));
+
         try {
-            DB::connection('mariadb')->statement($sql);
-            $this->fail("{$verb} was allowed");
+            $db->delete("DELETE FROM {$table} WHERE id = ?", [$id]);
+            $this->fail('DELETE was allowed');
         } catch (QueryException $e) {
             $this->assertSame(1142, $e->errorInfo[1]);
-            $this->assertStringContainsString("{$verb} command denied", $e->getMessage());
+            $this->assertStringContainsString('DELETE command denied', $e->getMessage());
         }
-    }
-
-    public function test_runtime_can_read_reference_tables(): void
-    {
-        $this->assertSame(0, DB::connection('mariadb')->table('aircraft_types')->count());
-        $this->assertSame(0, DB::connection('mariadb')->table('stands')->count());
     }
 }

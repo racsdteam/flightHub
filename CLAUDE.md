@@ -107,8 +107,11 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   active aircraft_types row (the airline's own row, else '*'); twins keep the AODB value;
   correction events source correction, source_ref "aircraft_types:<id>". Capacity is never
   filled.
-- Reference rows (airport_code_corrections, aircraft_types, stands) are added only after
-  Dany's review, each batch in its own migration; then hub:reapply-corrections.
+- Reference rows (airport_code_corrections, aircraft_types, stands) are entered in the admin
+  screens (Reference; reviewer = the signed-in user, reviewed_on = today), no longer by
+  migration (D-028's interim path ends). Every change marks "re-apply pending"; the
+  scheduled hub:reapply-corrections --if-pending (every 5 minutes) applies it, never inside
+  a web request.
 - GHR contact stripping (D-035): ghrOperatorDetails email, phone, address, zipcode and city
   are removed before a record is stored, compared or put in an event; name and id stay;
   raw responses keep them for 90 days.
@@ -170,7 +173,19 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   keys, session ids.
 - CSP: default-src 'none'; scripts and styles only from the hub or with the per-request
   nonce; no 'unsafe-eval', no 'unsafe-inline' (Livewire's CSP-safe build). No inline style
-  attributes in templates.
+  attributes or event handlers in templates; the only own script is public/js/hub.js (copy
+  buttons).
+- Screen map (each route carries its ability; every Livewire screen re-checks it on every
+  request, App\Livewire\AdminPage::boot):
+  Feed health /, Flights /flights and /flights/{aodbId}, Quality /quality and
+  /quality/{flag} — view-hub (resolving a flag: manage-quality);
+  Reference /reference/airport-codes, /reference/aircraft-types, /reference/stands —
+  manage-reference; Consumers /consumers, /consumers/{code}, /consumers/{code}/usage —
+  manage-consumers; Users /users — manage-users; Audit /audit — view-audit.
+- Sign-in throttle per IP: 20 failed sign-in steps (password or TOTP) in a minute → every
+  sign-in attempt from that IP gets 429 for the rest of the minute (audited once per block).
+- Shown once, never stored in the session, the Livewire snapshot, the audit or logs: API
+  keys (only the hash is stored) and temporary passwords.
 
 ## Security floor
 - Every permission enforced server-side, deny-by-default, with tests for the refused cases.

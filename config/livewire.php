@@ -9,4 +9,7 @@ return [
     // Assets are emitted by the layout (@livewireStyles / @livewireScripts) with the CSP nonce.
     'inject_assets' => false,
 
+    // Full-page components render into the admin layout.
+    'component_layout' => 'components.layouts.app',
+
 ];

@@ -148,17 +148,19 @@ class AdminAccessTest extends TestCase
                 Route::get("/__test/{$ability}", fn () => 'ok')->middleware("can:{$ability}");
             }
         });
+        DB::table('consumers')->insert(['code' => 'kia-pulse', 'name' => 'KIA PULSE', 'field_groups' => '[]', 'created_by' => 'TEST']);
         $guarded = collect(Route::getRoutes()->getRoutes())->filter(fn ($r) => array_intersect(
             ['can:manage-consumers', 'can:manage-users', 'can:view-audit'], $r->middleware()) !== [] && in_array('GET', $r->methods(), true));
-        $this->assertGreaterThanOrEqual(3, $guarded->count());
+        $uris = $guarded->map(fn ($r) => '/'.str_replace('{code}', 'kia-pulse', $r->uri()))->values();
+        $this->assertGreaterThanOrEqual(8, $uris->count(), 'consumers (3), users, audit and the 3 test routes');
 
         $this->actingAs($steward);
-        foreach ($guarded as $route) {
-            $this->get('/'.$route->uri())->assertForbidden();
+        foreach ($uris as $uri) {
+            $this->get($uri)->assertForbidden();
         }
         $this->actingAs($admin);
-        foreach ($guarded as $route) {
-            $this->get('/'.$route->uri())->assertOk();
+        foreach ($uris as $uri) {
+            $this->get($uri)->assertOk();
         }
         $this->assertSame(array_keys(Abilities::ROLES), ['view-hub', 'manage-quality', 'manage-reference', 'manage-consumers', 'manage-users', 'view-audit']);
     }

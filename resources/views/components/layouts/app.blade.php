@@ -27,6 +27,20 @@
         @if (auth()->user()->hasConfirmedTotp() && ! auth()->user()->must_change_password)
         @can('view-hub')
             <a href="{{ route('dashboard') }}" @class(['active' => request()->routeIs('dashboard')])>Feed health</a>
+            <a href="{{ route('flights.day') }}" @class(['active' => request()->routeIs('flights.*')])>Flights</a>
+            <a href="{{ route('quality.flags') }}" @class(['active' => request()->routeIs('quality.*')])>Quality</a>
+        @endcan
+        @can('manage-reference')
+            <a href="{{ route('reference.airport-codes') }}" @class(['active' => request()->routeIs('reference.*')])>Reference</a>
+        @endcan
+        @can('manage-consumers')
+            <a href="{{ route('consumers.list') }}" @class(['active' => request()->routeIs('consumers.*')])>Consumers</a>
+        @endcan
+        @can('manage-users')
+            <a href="{{ route('users.list') }}" @class(['active' => request()->routeIs('users.*')])>Users</a>
+        @endcan
+        @can('view-audit')
+            <a href="{{ route('audit.log') }}" @class(['active' => request()->routeIs('audit.*')])>Audit</a>
         @endcan
         @endif
     </nav>
@@ -49,6 +63,7 @@
 
 @auth
     @livewireScripts
+    <script src="{{ asset('js/hub.js') }}" defer></script>
 @endauth
 </body>
 </html>

@@ -5,6 +5,7 @@ use App\Api\ApiResponses;
 use App\Http\Middleware\EnsureAccountReady;
 use App\Http\Middleware\EnsureChallengeNotLocked;
 use App\Http\Middleware\SecurityHeaders;
+use App\Http\Middleware\ThrottleSignIn;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -22,6 +23,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'account' => EnsureAccountReady::class,
             'challenge.unlocked' => EnsureChallengeNotLocked::class,
+            'signin.throttle' => ThrottleSignIn::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

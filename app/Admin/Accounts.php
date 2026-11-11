@@ -7,6 +7,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\RateLimiter;
 use InvalidArgumentException;
 
 /**
@@ -22,6 +23,9 @@ final class Accounts
     public const MAX_FAILURES = 5;
 
     public const LOCK_MINUTES = 15;
+
+    /** Failed sign-in steps (password or TOTP) per IP per minute before every attempt from it gets 429. */
+    public const IP_MAX_FAILURES = 20;
 
     /**
      * Fortify::authenticateUsing: the user, or null for every refusal alike
@@ -53,6 +57,17 @@ final class Accounts
     public static function failure(?User $user, string $email, string $kind): void
     {
         Audit::record($kind === 'totp' ? 'totp.failed' : 'signin.failed', ['email' => mb_substr($email, 0, 100)], $user ? 'user' : null, $user?->id, actor: 'hub', userId: $user?->id);
+
+        // Per IP: passwords can be guessed, so the IP is blocked whatever the account.
+        $ipKey = self::ipKey();
+        RateLimiter::hit($ipKey, 60);
+        if (RateLimiter::attempts($ipKey) === self::IP_MAX_FAILURES) {
+            Audit::record('signin.ip_blocked', [
+                'ip' => request()->ip(),
+                'until' => CarbonImmutable::now('UTC')->addSeconds(RateLimiter::availableIn($ipKey))->format('Y-m-d\TH:i:s\Z'),
+            ], actor: 'hub');
+        }
+
         if ($user === null) {
             return;
         }
@@ -65,6 +80,16 @@ final class Accounts
         } else {
             $user->forceFill(['failed_logins' => $failures])->save();
         }
+    }
+
+    public static function ipKey(): string
+    {
+        return 'signin-ip:'.request()->ip();
+    }
+
+    public static function ipBlocked(): bool
+    {
+        return RateLimiter::tooManyAttempts(self::ipKey(), self::IP_MAX_FAILURES);
     }
 
     /**
@@ -143,6 +168,31 @@ final class Accounts
         Audit::record('user.reset', ['email' => $user->email, 'totp' => 'reset'], 'user', $user->id, actor: $actor);
 
         return $password;
+    }
+
+    public static function reactivate(User $user, string $actor): void
+    {
+        $user->forceFill(['active' => true, 'failed_logins' => 0, 'locked_until' => null])->save();
+        Audit::record('user.reactivated', ['email' => $user->email, 'active' => ['from' => false, 'to' => true]], 'user', $user->id, actor: $actor);
+    }
+
+    public static function changeRole(User $user, string $role, string $actor): void
+    {
+        if (! in_array($role, self::ROLES, true)) {
+            throw new InvalidArgumentException('Role must be admin or steward.');
+        }
+        $before = $user->role;
+        $user->forceFill(['role' => $role])->save();
+        Audit::record('user.role_changed', ['email' => $user->email, 'role' => ['from' => $before, 'to' => $role]], 'user', $user->id, actor: $actor);
+    }
+
+    /**
+     * Would this change leave no active admin? (demoting or deactivating the last one)
+     */
+    public static function isLastActiveAdmin(User $user): bool
+    {
+        return $user->active && $user->role === 'admin'
+            && User::where('active', true)->where('role', 'admin')->where('id', '<>', $user->id)->doesntExist();
     }
 
     public static function deactivate(User $user, string $actor): void

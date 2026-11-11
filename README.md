@@ -44,21 +44,15 @@ distributes it to other RAC systems through its own API.
    A second run with the same fixture reports "content unchanged" and writes only
    `last_seen_at`. The flights land in the dev database `flighthub`.
 
-6. Reference data (airport_code_corrections, aircraft_types, stands) has no screens yet and
-   the runtime user may only read it. Rows are added only after Dany has reviewed them,
-   each reviewed batch in its own migration (like the NB0 correction, D-028), with
-   `reviewed_by` and `reviewed_on` filled in:
+6. Reference data (airport_code_corrections, aircraft_types, stands) is entered in the admin
+   screens (Reference, admin and data steward): the signed-in user is recorded as reviewer.
+   Every change marks "re-apply pending"; the scheduler runs
 
-       php artisan make:migration add_reviewed_aircraft_types_2026_11_12
-       # in up(): DB::table('aircraft_types')->insert([...]);  down(): delete those rows
-       php artisan migrate --database=mariadb_ddl
-       php artisan migrate --database=mariadb_ddl --env=testing
-       php artisan hub:reapply-corrections
+       php artisan hub:reapply-corrections --if-pending
 
-   `hub:reapply-corrections` re-evaluates every flight's served values against the active
+   every 5 minutes, which re-evaluates every flight's served values against the active
    reference data (new version and correction events where a value changes; a second run
-   writes nothing). In production it runs after the migration, whenever reference data
-   changed.
+   writes nothing). `php artisan hub:reapply-corrections` (without the option) runs it now.
 
 7. Run the tests on PHP 8.3 (Homebrew php@8.3, or set `PHP83_BIN`; MariaDB database
    `flighthub_test`, never SQLite):

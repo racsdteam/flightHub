@@ -13,3 +13,6 @@ Schedule::command('hub:prune-api-calls')->daily();
 
 // Stale-feed alert: one email when the feed turns stale, one when it recovers (D-041).
 Schedule::command('hub:check-feed')->everyFiveMinutes()->withoutOverlapping(5);
+
+// Served values follow reference-data changes made in the screens (re-apply pending).
+Schedule::command('hub:reapply-corrections --if-pending')->everyFiveMinutes()->withoutOverlapping(10);

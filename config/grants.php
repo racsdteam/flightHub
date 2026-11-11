@@ -21,10 +21,10 @@ return [
         'flight_versions' => ['SELECT', 'INSERT'],
         'change_events' => ['SELECT', 'INSERT'],
 
-        // Reviewed corrections; editing comes with the admin screens.
-        'airport_code_corrections' => ['SELECT'],
-        'aircraft_types' => ['SELECT'],
-        'stands' => ['SELECT'],
+        // Reference data, edited in the admin screens: deactivated, never deleted.
+        'airport_code_corrections' => ['SELECT', 'INSERT', 'UPDATE'],
+        'aircraft_types' => ['SELECT', 'INSERT', 'UPDATE'],
+        'stands' => ['SELECT', 'INSERT', 'UPDATE'],
 
         // Quality flags: current state, never deleted; their events are append-only.
         'quality_flags' => ['SELECT', 'INSERT', 'UPDATE'],
