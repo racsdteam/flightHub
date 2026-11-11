@@ -145,6 +145,26 @@ class ApiFlightsTest extends PollTestCase
         }
     }
 
+    public function test_first_seen_is_the_flight_with_served_values_and_hub_times_have_no_fraction(): void
+    {
+        $key = $this->consumerKey(['route', 'quality']);
+        $this->poll();
+
+        $history = $this->api('flights/'.self::KQ470.'?history=1', $key)->json('history');
+        $first = $history[0];
+        $this->assertSame('first_seen', $first['kind']);
+        $this->assertSame(['NBO', 'HKJK'], [$first['new']['adepIata'], $first['new']['adepIcao']]);
+        $this->assertSame([], $first['new']['hub']['quality']);
+        $this->assertSame('2026-10-29T06:00:00Z', $first['new']['hub']['referenceTime']);
+        $this->assertSame('2026-10-29T07:42:30Z', $first['observedAt']);
+
+        $response = $this->api('flights?day=2026-10-29&as_of=2026-10-29T07:42:30Z', $key);
+        foreach ([$response->json('meta.asOf'), $response->json('meta.window.from'), $response->json('meta.requestedAsOf'),
+            $this->flightIn($response, self::KQ470)['hub']['quality'][0]['since']] as $time) {
+            $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', $time);
+        }
+    }
+
     public function test_feed_becomes_stale_15_minutes_after_the_last_ok_poll(): void
     {
         $key = $this->consumerKey(['route']);

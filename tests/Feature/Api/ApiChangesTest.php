@@ -71,7 +71,7 @@ class ApiChangesTest extends PollTestCase
 
         $event = collect($this->api('changes?cursor=0&limit=1000', $key)->json('data'))->firstWhere('source', 'correction');
         $this->assertSame(['cursor', 'aodbId', 'observedAt', 'kind', 'field', 'old', 'new', 'source'], array_keys($event));
-        $this->assertSame('2026-10-29T07:42:30.000000Z', $event['observedAt']);
+        $this->assertSame('2026-10-29T07:42:30Z', $event['observedAt']);
         $this->assertContains($event['aodbId'], [self::KQ470, self::KQ478]);
     }
 }

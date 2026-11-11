@@ -40,7 +40,9 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
 - No Node and no SSH on the server. Deploy: maintenance on → git pull → composer install
   --no-dev → migrate as DDL user → grants (Dany, as root, when tables changed) →
   php artisan hub:reapply-corrections (whenever reference data changed) → caches (route
-  cache allowed: served at the subdomain root) → preflight → up.
+  cache allowed: served at the subdomain root) → preflight → up. First deploy only: create
+  the first admin with php artisan hub:admin-create {email} {name} --role=admin (temporary
+  password printed once).
   No Node anywhere: CSS is hand-written and committed (D-018).
 - cPanel cron runs the scheduler every minute. No daemons, no long-running queue workers.
   Scheduled commands use withoutOverlapping and finish well inside their interval.
@@ -146,6 +148,29 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   ids, reference rows their natural keys.
 - Every call is logged in api_calls (append-only, 1 year, D-036), never the key or the
   Authorization header.
+
+## Admin screens
+- Fortify (sign-in only; its routes are registered in routes/web.php) + Livewire, Blade, one
+  layout, public/css/hub.css, fonts in public/fonts. No outside URL at run time (no CDN, no
+  Google Fonts, no password-breach API).
+- Roles (D-040) as Gate abilities, deny-by-default (App\Admin\Abilities): view-hub,
+  manage-quality, manage-reference (admin, steward); manage-consumers, manage-users,
+  view-audit (admin). Every web route carries a can:… middleware except sign-in, two-factor
+  and sign-out (RouteAbilitiesTest).
+- TOTP is mandatory: no page before enrolment; recovery codes shown once, single-use. A user
+  flagged must_change_password changes it before any page. Passwords: ≥ 12 characters, not
+  the email. 5 wrong passwords or TOTP codes in a row lock the account 15 minutes; the
+  message never says whether the email exists. Sessions: database, 30 minutes idle,
+  SameSite=strict, HttpOnly, Secure in production (D-043). Users are deactivated, never
+  deleted; deactivation ends their sessions.
+- Audited (admin_audit, append-only, kept forever): sign-in success / failure / lock, TOTP
+  enrolled / failed / recovery code used, password changed, sign-out, user created / reset /
+  deactivated, stale and recovery alerts, quality resolutions.
+- Never in the audit log or any log: passwords, TOTP secrets or codes, recovery codes, API
+  keys, session ids.
+- CSP: default-src 'none'; scripts and styles only from the hub or with the per-request
+  nonce; no 'unsafe-eval', no 'unsafe-inline' (Livewire's CSP-safe build). No inline style
+  attributes in templates.
 
 ## Security floor
 - Every permission enforced server-side, deny-by-default, with tests for the refused cases.

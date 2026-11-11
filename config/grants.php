@@ -42,8 +42,10 @@ return [
         'jobs' => ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
         'job_batches' => ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
         'failed_jobs' => ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
-        'users' => ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
-        'password_reset_tokens' => ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+        // Admin accounts: never deleted (deactivate). No e-mail password reset in v1.
+        'users' => ['SELECT', 'INSERT', 'UPDATE'],
+        'password_reset_tokens' => [],
+        'admin_audit' => ['SELECT', 'INSERT'],
 
         'migrations' => [],
     ],

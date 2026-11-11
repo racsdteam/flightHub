@@ -29,14 +29,14 @@ class ApiGate
         $auth = null;
 
         try {
-            // An IP over its refused-call limit is paused before any key is checked.
-            $ipKey = 'api-refused:'.$request->ip();
-            if (RateLimiter::tooManyAttempts($ipKey, (int) config('api_fields.refused_per_ip_per_minute'))) {
-                throw self::rateLimited(RateLimiter::availableIn($ipKey));
-            }
-
+            // The key first: a valid key is never blocked by the IP limit.
             $auth = ApiKeys::authenticate($request->header('Authorization'));
             if ($auth === null) {
+                // Only refused calls count toward the per-IP limit; beyond it they get 429.
+                $ipKey = 'api-refused:'.$request->ip();
+                if (RateLimiter::tooManyAttempts($ipKey, (int) config('api_fields.refused_per_ip_per_minute'))) {
+                    throw self::rateLimited(RateLimiter::availableIn($ipKey));
+                }
                 RateLimiter::hit($ipKey, 60);
                 throw new ApiException(401, 'UNAUTHORIZED', 'A valid API key is required.');
             }

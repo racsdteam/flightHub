@@ -12,4 +12,5 @@ Route::middleware(ApiGate::class)->group(function () {
     Route::get('changes', [ApiController::class, 'changes']);
     Route::get('health', [ApiController::class, 'health']);
     Route::fallback([ApiController::class, 'notFound']);
+    Route::match(['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], '{any?}', [ApiController::class, 'methodNotAllowed'])->where('any', '.*');
 });

@@ -68,7 +68,7 @@ class ApiController
         if ($this->flag($request, 'history')) {
             $events = DB::table('change_events')->where('flight_id', $row->id)->orderBy('id')
                 ->get()->each(fn ($e) => $e->aodb_id = $row->aodb_id);
-            $extra['history'] = $events->map(fn ($e) => $presenter->event($e))->filter()->values()->all();
+            $extra['history'] = FlightPresenter::events($fields, $events);
         }
 
         $request->attributes->set('api.rows', 1 + count($extra['history'] ?? []));
@@ -100,8 +100,7 @@ class ApiController
             ->limit($limit)
             ->get(['e.*', 'f.aodb_id']);
 
-        $presenter = FlightPresenter::for($this->fields($request), collect());
-        $events = $scanned->map(fn ($e) => $presenter->event($e))->filter()->values()->all();
+        $events = FlightPresenter::events($this->fields($request), $scanned);
         $next = $scanned->isEmpty() ? (int) $cursor : (int) $scanned->last()->id;
         $head = (int) (DB::table('change_events')->max('id') ?? 0);
         $request->attributes->set('api.rows', count($events));
@@ -132,6 +131,14 @@ class ApiController
     public function notFound(): never
     {
         throw ApiException::notFound();
+    }
+
+    /**
+     * Any other method on any /api/v1 path: through ApiGate (so it is logged), then 405.
+     */
+    public function methodNotAllowed(): never
+    {
+        throw new ApiException(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.', ['Allow' => 'GET, HEAD']);
     }
 
     private function fields(Request $request): FieldSet

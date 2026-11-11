@@ -122,36 +122,44 @@ final class FlightPresenter
     }
 
     /**
+     * Visible change events (each with aodb_id), in order. first_seen's value
+     * is the flight in the same shape as /flights data, from the version it
+     * produced; its hub.quality is empty (flags are evaluated after the poll
+     * that first saw the flight).
+     *
+     * @param  Collection<int, object>  $events
+     * @return list<array<string, mixed>>
+     */
+    public static function events(FieldSet $fields, Collection $events): array
+    {
+        $ids = $events->where('kind', 'first_seen')->pluck('version_id')->unique()->all();
+        $versions = $ids === [] ? collect() : DB::table('flight_versions')->whereIn('id', $ids)->get()->keyBy('id');
+        $presenter = self::for($fields, $versions->values());
+        $presenter->quality = [];
+
+        return $events->map(fn ($e) => $presenter->event($e, $versions[$e->version_id] ?? null))->filter()->values()->all();
+    }
+
+    /**
      * A change event, or null when its field is outside the consumer's groups.
-     * first_seen's value is filtered the same way.
      *
      * @return array<string, mixed>|null
      */
-    public function event(object $event): ?array
+    private function event(object $event, ?object $version): ?array
     {
         if ($event->field !== null && ! $this->fields->allows($event->field)) {
             return null;
         }
 
         $old = $event->old_value === null ? null : json_decode($event->old_value);
-        $new = $event->new_value === null ? null : json_decode($event->new_value);
-        if ($event->kind === 'first_seen' && $new instanceof stdClass) {
-            $served = [];
-            foreach ((array) ($new->served ?? []) as $path => $value) {
-                if ($this->fields->allows($path)) {
-                    $served[$path] = $value;
-                }
-            }
-            $new = [
-                'record' => (object) $this->fields->filter($new->record ?? new stdClass, padded: false),
-                'served' => (object) $served,
-            ];
-        }
+        $new = $event->kind === 'first_seen' && $version !== null
+            ? $this->flight($version)
+            : ($event->new_value === null ? null : json_decode($event->new_value));
 
         return [
             'cursor' => (int) $event->id,
             'aodbId' => $event->aodb_id,
-            'observedAt' => CarbonImmutable::parse($event->observed_at, 'UTC')->format('Y-m-d\TH:i:s.u\Z'),
+            'observedAt' => self::iso($event->observed_at),
             'kind' => $event->kind,
             'field' => $event->field,
             'old' => $old,

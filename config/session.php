@@ -32,9 +32,10 @@ return [
     |
     */
 
-    'lifetime' => (int) env('SESSION_LIFETIME', 120),
+    // D-043: admin sessions end after 30 minutes idle (fixed, not an env setting).
+    'lifetime' => 30,
 
-    'expire_on_close' => env('SESSION_EXPIRE_ON_CLOSE', false),
+    'expire_on_close' => false,
 
     /*
     |--------------------------------------------------------------------------
@@ -169,7 +170,8 @@ return [
     |
     */
 
-    'secure' => env('SESSION_SECURE_COOKIE'),
+    // Secure in production (HTTPS only); SESSION_SECURE_COOKIE overrides.
+    'secure' => env('SESSION_SECURE_COOKIE') ?? (env('APP_ENV') === 'production'),
 
     /*
     |--------------------------------------------------------------------------
@@ -182,7 +184,7 @@ return [
     |
     */
 
-    'http_only' => env('SESSION_HTTP_ONLY', true),
+    'http_only' => true,
 
     /*
     |--------------------------------------------------------------------------
@@ -199,7 +201,7 @@ return [
     |
     */
 
-    'same_site' => env('SESSION_SAME_SITE', 'lax'),
+    'same_site' => 'strict',
 
     /*
     |--------------------------------------------------------------------------

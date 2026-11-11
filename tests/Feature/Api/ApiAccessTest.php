@@ -109,8 +109,24 @@ class ApiAccessTest extends PollTestCase
         }
 
         $this->api('health', 'fdh_AAAAAAAA_'.str_repeat('c', 40))->assertStatus(429)->assertHeader('Retry-After');
-        // The IP is paused before any key is checked.
-        $this->api('health', $good)->assertStatus(429);
+        $this->api('health', null)->assertStatus(429);
+        // A valid key is never blocked by the IP limit (the key is checked first).
+        $this->api('health', $good)->assertOk();
+    }
+
+    public function test_wrong_method_calls_are_logged_like_any_other_call(): void
+    {
+        $key = $this->consumerKey(['route']);
+
+        $this->postJson('/api/v1/flights', [], ['Authorization' => 'Bearer '.$key])
+            ->assertStatus(405)->assertHeader('Allow', 'GET, HEAD')
+            ->assertExactJson(['error' => 'METHOD_NOT_ALLOWED', 'message' => 'Method not allowed.']);
+        $this->deleteJson('/api/v1/changes')->assertStatus(401);
+
+        $calls = DB::table('api_calls')->orderBy('id')->get();
+        $this->assertSame([['POST', '/api/v1/flights', 405, 'METHOD_NOT_ALLOWED'], ['DELETE', '/api/v1/changes', 401, 'UNAUTHORIZED']],
+            $calls->map(fn ($c) => [$c->method, $c->path, (int) $c->status, $c->error_code])->all());
+        $this->assertNotNull($calls[0]->consumer_id);
     }
 
     public function test_errors_are_json_without_stack_trace_even_in_debug(): void

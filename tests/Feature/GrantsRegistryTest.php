@@ -8,7 +8,7 @@ use Tests\TestCase;
 
 class GrantsRegistryTest extends TestCase
 {
-    private const APPEND_ONLY = ['polls', 'raw_responses', 'flight_versions', 'change_events', 'quality_flag_events', 'api_calls'];
+    private const APPEND_ONLY = ['polls', 'raw_responses', 'flight_versions', 'change_events', 'quality_flag_events', 'api_calls', 'admin_audit'];
 
     private function hubTestDatabase(): string
     {

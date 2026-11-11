@@ -33,7 +33,8 @@ return [
         'local' => [
             'driver' => 'local',
             'root' => storage_path('app/private'),
-            'serve' => true,
+            // No file serving route (storage/{path}): the hub serves no stored files.
+            'serve' => false,
             'throw' => false,
             'report' => false,
         ],

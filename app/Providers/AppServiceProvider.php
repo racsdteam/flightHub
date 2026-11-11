@@ -2,11 +2,20 @@
 
 namespace App\Providers;
 
+use App\Admin\Abilities;
 use App\Aodb\AodbClient;
 use App\Aodb\AodbConfigurationException;
 use App\Aodb\FixtureAodbClient;
 use App\Aodb\HttpAodbClient;
+use App\Api\ApiResponses;
+use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
+use Livewire\Features\SupportFileUploads\FilePreviewController;
+use Livewire\Features\SupportFileUploads\FileUploadController;
+use Livewire\Livewire;
+use Livewire\Mechanisms\HandleRequests\EndpointResolver;
+use Livewire\Mechanisms\HandleRequests\RequireLivewireHeaders;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -31,6 +40,21 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        Abilities::register();
+
+        // The stale-feed banner on every admin screen (D-041).
+        View::composer('components.layouts.app', fn ($view) => $view->with('feed', auth()->check() ? ApiResponses::feed() : null));
+
+        // Livewire updates run behind the same checks as the admin pages.
+        Livewire::setUpdateRoute(fn ($handle, $path) => Route::post($path, $handle)
+            ->middleware(['web', RequireLivewireHeaders::class, 'auth', 'account', 'can:view-hub']));
+
+        // Livewire's signed upload / preview endpoints (unused by the hub) get the same checks.
+        $this->app->booted(function () {
+            Route::post(EndpointResolver::uploadPath(), [FileUploadController::class, 'handle'])
+                ->middleware(['auth', 'account', 'can:view-hub'])->name('livewire.upload-file');
+            Route::get(EndpointResolver::previewPath(), [FilePreviewController::class, 'handle'])
+                ->middleware(['auth', 'account', 'can:view-hub'])->name('livewire.preview-file');
+        });
     }
 }

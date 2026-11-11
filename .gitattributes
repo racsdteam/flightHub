@@ -9,3 +9,6 @@
 /.github export-ignore
 CHANGELOG.md export-ignore
 .styleci.yml export-ignore
+
+# Third-party font files are kept byte-for-byte as downloaded (D-042).
+/public/fonts/* -text

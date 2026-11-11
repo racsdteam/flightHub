@@ -74,9 +74,11 @@ class ApiScopesTest extends PollTestCase
         $this->assertSame(self::IDENTITY_ROUTE, array_keys($one->json('data')));
         $fields = array_column($one->json('history'), 'field');
         $this->assertSame([null, 'status'], $fields, 'first_seen, then only the status change (aibt, pkg and secretNewField are outside)');
+        // first_seen's value is the flight in the same shape as /flights data.
         $firstSeen = $one->json('history.0.new');
-        $this->assertSame([], array_diff(array_keys($firstSeen['record']), self::IDENTITY_ROUTE));
-        $this->assertSame([], array_diff(array_keys($firstSeen['served']), ['adepIata', 'adepIcao', 'adesIata', 'adesIcao']));
+        $this->assertSame(self::IDENTITY_ROUTE, array_keys($firstSeen));
+        $this->assertSame('IN_FLIGHT', $firstSeen['status']);
+        $this->assertSame(['referenceTime', 'inFeed', 'sameAs'], array_keys($firstSeen['hub']));
         $this->assertNoOutsideField($one->getContent());
 
         $changes = $this->api('changes?cursor=0&limit=1000', $key)->assertOk();

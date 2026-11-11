@@ -2,9 +2,11 @@
 
 namespace App\Quality;
 
+use App\Admin\Audit;
 use App\Collector\FlightNormaliser;
 use App\Collector\Poller;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use RuntimeException;
@@ -19,8 +21,8 @@ use RuntimeException;
  * (source manual), under GET_LOCK('flighthub_change_events'). Removing that
  * resolution reverses it the same way.
  *
- * actor is free text until admin accounts exist (batch 6: the user and the
- * audit log).
+ * actor: the signed-in user's email when there is one (batch 6a), else the
+ * given text (CLI, tests). Every resolution is also written to admin_audit.
  */
 final class FlagResolver
 {
@@ -30,7 +32,7 @@ final class FlagResolver
 
     public function resolve(int $flagId, ?string $resolution, string $actor, ?string $note = null): object
     {
-        $actor = trim($actor);
+        $actor = trim(Auth::user()?->email ?? $actor);
         if ($resolution !== null && ! in_array($resolution, self::RESOLUTIONS, true)) {
             throw new InvalidArgumentException('Resolution must be one of '.implode(', ', self::RESOLUTIONS).', or null.');
         }
@@ -70,6 +72,12 @@ final class FlagResolver
             'updated_at' => $now->format('Y-m-d H:i:s'),
         ]);
         QualityEvaluator::event((int) $flag->id, 'resolved', $flag->resolution, $resolution, $actor, $note, $at);
+        Audit::record('quality.resolved', [
+            'rule' => $flag->rule,
+            'field' => $flag->field,
+            'resolution' => ['from' => $flag->resolution, 'to' => $resolution],
+            'note' => $note,
+        ], 'quality_flag', (int) $flag->id, actor: $actor);
 
         return DB::table('quality_flags')->where('id', $flag->id)->first();
     }

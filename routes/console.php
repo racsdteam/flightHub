@@ -10,3 +10,6 @@ Schedule::command('hub:prune-raw')->daily();
 
 // API call log kept 1 year (D-036).
 Schedule::command('hub:prune-api-calls')->daily();
+
+// Stale-feed alert: one email when the feed turns stale, one when it recovers (D-041).
+Schedule::command('hub:check-feed')->everyFiveMinutes()->withoutOverlapping(5);

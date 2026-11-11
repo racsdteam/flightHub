@@ -2,20 +2,23 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
+use Carbon\CarbonImmutable;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Laravel\Fortify\TwoFactorAuthenticatable;
 
+/**
+ * An admin account (D-040): role admin or steward. Never deleted: deactivate.
+ * TOTP is mandatory (Fortify's two-factor columns, stored encrypted).
+ */
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
-    use HasFactory, Notifiable;
+    use HasFactory, Notifiable, TwoFactorAuthenticatable;
 
     /**
-     * The attributes that are mass assignable.
-     *
      * @var list<string>
      */
     protected $fillable = [
@@ -25,18 +28,16 @@ class User extends Authenticatable
     ];
 
     /**
-     * The attributes that should be hidden for serialization.
-     *
      * @var list<string>
      */
     protected $hidden = [
         'password',
         'remember_token',
+        'two_factor_secret',
+        'two_factor_recovery_codes',
     ];
 
     /**
-     * Get the attributes that should be cast.
-     *
      * @return array<string, string>
      */
     protected function casts(): array
@@ -44,6 +45,22 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'active' => 'boolean',
+            'must_change_password' => 'boolean',
+            'failed_logins' => 'integer',
+            'locked_until' => 'immutable_datetime',
+            'last_login_at' => 'immutable_datetime',
+            'two_factor_confirmed_at' => 'immutable_datetime',
         ];
+    }
+
+    public function isLocked(): bool
+    {
+        return $this->locked_until !== null && $this->locked_until->gt(CarbonImmutable::now('UTC'));
+    }
+
+    public function hasConfirmedTotp(): bool
+    {
+        return $this->two_factor_secret !== null && $this->two_factor_confirmed_at !== null;
     }
 }
