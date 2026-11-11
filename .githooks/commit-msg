@@ -1,0 +1,34 @@
+#!/bin/sh
+# Commit messages contain only Dany's text (R10): a subject line and an
+# optional body. Refuses a message with
+#   (a) a trailer line "Something-by: ..." (Co-authored-by, Signed-off-by, ...)
+#   (b) the name of an AI tool or vendor
+# Comment lines (#) are ignored, as git strips them. The rules file name
+# CLAUDE.md is not a tool name and is allowed.
+
+msg_file=$1
+fail=0
+
+refuse() {
+    printf 'commit-msg: REFUSED (line %s): %s\n' "$1" "$2" >&2
+    fail=1
+}
+
+# Message without comment lines, with the CLAUDE.md file name blanked out.
+body=$(grep -v '^#' "$msg_file" | sed 's/CLAUDE\.md/RULES-FILE/g')
+
+trailers=$(printf '%s\n' "$body" | grep -n -i -E '^[A-Za-z]+(-[A-Za-z]+)*-by:' | sed 's/:.*//')
+for n in $trailers; do
+    refuse "$n" 'rule (a) trailer line "...-by:"'
+done
+
+tools=$(printf '%s\n' "$body" | grep -n -i -E '(^|[^A-Za-z0-9])(claude|anthropic|openai|chatgpt|gpt-?[0-9]|copilot|gemini|codex|windsurf|tabnine|codeium|ai[- ]generated|generated (with|by) ai|large language model|llm)([^A-Za-z0-9]|$)' | sed 's/:.*//')
+for n in $tools; do
+    refuse "$n" 'rule (b) names an AI tool or vendor'
+done
+
+if [ "$fail" -ne 0 ]; then
+    echo "commit-msg: commit refused (.githooks/commit-msg): only Dany's subject and body are allowed." >&2
+    exit 1
+fi
+exit 0

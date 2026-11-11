@@ -3,12 +3,15 @@
 namespace App\Aodb;
 
 use App\Flights\Window;
+use DateTimeImmutable;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Http;
+use Psr\Http\Message\RequestInterface;
+use SensitiveParameterValue;
 use Throwable;
 
 /**
@@ -16,13 +19,22 @@ use Throwable;
  *
  * Never logs, prints, stores unencrypted or puts in an exception message the
  * password, the token, an Authorization header or any /login body (R9). The
- * token lives in the cache store encrypted with the app key.
+ * token lives in the cache store encrypted with the app key. Parameters that
+ * carry the token or the config are #[\SensitiveParameter]: stack traces show
+ * a placeholder instead.
+ *
+ * HTTP 429 on any call (login included) pauses every request until
+ * Retry-After, or for 5 minutes without one (rate limiting is not documented).
  */
 final class HttpAodbClient implements AodbClient
 {
     public const TOKEN_KEY = 'aodb.token';
 
     public const BACKOFF_KEY = 'aodb.login_backoff_until';
+
+    public const RATE_LIMIT_KEY = 'aodb.rate_limited_until';
+
+    private const RATE_LIMIT_DEFAULT_SECONDS = 300;
 
     /** 401 keys after which one re-login and one retry are tried. */
     private const RELOGIN_KEYS = ['TOKEN_EXPIRED', 'NO_TOKEN', 'USER_NOT_LOGGED', 'WRONG_TOKEN_FORMAT'];
@@ -36,7 +48,7 @@ final class HttpAodbClient implements AodbClient
     /**
      * @param  array<string, mixed>  $config  config('aodb')
      */
-    public function __construct(private readonly array $config) {}
+    public function __construct(#[\SensitiveParameter] private readonly array $config) {}
 
     public function flightsAtAirport(Window $window): AodbResponse
     {
@@ -61,6 +73,10 @@ final class HttpAodbClient implements AodbClient
             return AodbResponse::failed(AodbResponse::CONFIG_ERROR, $path, $problem);
         }
 
+        if ($this->rateLimited()) {
+            return AodbResponse::failed(AodbResponse::RATE_LIMITED, $path, 'rate_limited');
+        }
+
         $token = $this->cachedToken();
         if ($token === null) {
             $token = $this->login();
@@ -71,6 +87,10 @@ final class HttpAodbClient implements AodbClient
 
         $response = $this->send($path, $query, $token);
 
+        if ($response instanceof Response && $response->status() === 429) {
+            return $this->rateLimit($path, $response);
+        }
+
         if ($response instanceof Response && $response->status() === 401
             && in_array(AodbResponse::errorKey($response->body()), self::RELOGIN_KEYS, true)) {
             Cache::forget(self::TOKEN_KEY);
@@ -79,6 +99,9 @@ final class HttpAodbClient implements AodbClient
                 return $token;
             }
             $response = $this->send($path, $query, $token);
+            if ($response instanceof Response && $response->status() === 429) {
+                return $this->rateLimit($path, $response);
+            }
         }
 
         if ($response instanceof AodbResponse) {
@@ -93,10 +116,17 @@ final class HttpAodbClient implements AodbClient
         };
     }
 
-    private function send(string $path, array $query, string $token): Response|AodbResponse
+    private function send(string $path, array $query, #[\SensitiveParameter] string $token): Response|AodbResponse
     {
+        // Not withToken(): that puts the header in Guzzle's options array, which
+        // a stack trace records. The header is set on the request object instead,
+        // from a SensitiveParameterValue that dumps as empty.
+        $secret = new SensitiveParameterValue($token);
+
         try {
-            return $this->http()->withToken($token)->get($path, $query);
+            return $this->http()
+                ->withRequestMiddleware(fn (RequestInterface $request) => $request->withHeader('Authorization', 'Bearer '.$secret->getValue()))
+                ->get($path, $query);
         } catch (ConnectionException $e) {
             return $this->connectionFailure($path, $e);
         }
@@ -107,6 +137,10 @@ final class HttpAodbClient implements AodbClient
      */
     private function login(): string|AodbResponse
     {
+        if ($this->rateLimited()) {
+            return AodbResponse::failed(AodbResponse::RATE_LIMITED, self::LOGIN_PATH, 'rate_limited');
+        }
+
         $until = Cache::get(self::BACKOFF_KEY);
         if ($until !== null && now()->getTimestamp() < (int) $until) {
             return AodbResponse::failed(AodbResponse::LOGIN_BACKOFF, self::LOGIN_PATH, 'login_backoff');
@@ -119,6 +153,11 @@ final class HttpAodbClient implements AodbClient
             ]);
         } catch (ConnectionException $e) {
             return $this->connectionFailure(self::LOGIN_PATH, $e);
+        }
+
+        // Rate limited: a pause, not a failed login (no login back-off).
+        if ($response->status() === 429) {
+            return $this->rateLimit(self::LOGIN_PATH, $response);
         }
 
         if (in_array($response->status(), [400, 401], true)) {
@@ -167,7 +206,7 @@ final class HttpAodbClient implements AodbClient
      * Seconds to keep the token: the JWT's exp minus 60 s, read without
      * verifying the signature; unreadable → 30 minutes.
      */
-    private function tokenLifetime(string $token): int
+    private function tokenLifetime(#[\SensitiveParameter] string $token): int
     {
         $parts = explode('.', $token);
         if (count($parts) === 3) {
@@ -179,6 +218,38 @@ final class HttpAodbClient implements AodbClient
         }
 
         return 30 * 60;
+    }
+
+    private function rateLimited(): bool
+    {
+        $until = Cache::get(self::RATE_LIMIT_KEY);
+
+        return $until !== null && now()->getTimestamp() < (int) $until;
+    }
+
+    /**
+     * Pause every request until Retry-After (seconds or an HTTP date), else 5 minutes.
+     */
+    private function rateLimit(string $path, Response $response): AodbResponse
+    {
+        $now = now()->getTimestamp();
+        $retryAfter = trim($response->header('Retry-After'));
+        $until = $now + self::RATE_LIMIT_DEFAULT_SECONDS;
+
+        if (preg_match('/^\d{1,10}$/', $retryAfter)) {
+            $until = $now + (int) $retryAfter;
+        } elseif ($retryAfter !== '') {
+            $date = DateTimeImmutable::createFromFormat(DATE_RFC7231, $retryAfter);
+            if ($date !== false) {
+                $until = $date->getTimestamp();
+            }
+        }
+
+        if ($until > $now) {
+            Cache::put(self::RATE_LIMIT_KEY, $until, $until - $now);
+        }
+
+        return AodbResponse::fromFailure(AodbResponse::RATE_LIMITED, $path, 429, $response->body());
     }
 
     private function connectionFailure(string $path, ConnectionException $e): AodbResponse

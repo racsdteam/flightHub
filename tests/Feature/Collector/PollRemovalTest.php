@@ -48,6 +48,15 @@ class PollRemovalTest extends PollTestCase
         $removed = $this->events(self::WB711, 'removed_from_feed');
         $this->assertCount(1, $removed);
         $this->assertSame((int) $versions[1]->id, (int) $removed[0]->version_id);
+
+        // The hub's own conclusion, with the byid answer that did not contain the flight as evidence.
+        $this->assertSame('system', $removed[0]->source);
+        $this->assertSame('system', $versions[1]->cause);
+        $this->assertSame('aodb', $versions[0]->cause);
+        $evidence = DB::table('raw_responses')->where('endpoint', '/flights/v1/byid')->sole();
+        $this->assertSame('raw_responses:'.$evidence->id, $removed[0]->source_ref);
+        $this->assertSame([], json_decode(gzdecode($evidence->body), true)['flights']);
+        $this->assertNull($evidence->request_window_from);
     }
 
     public function test_removed_flight_that_reappears_returns_to_feed(): void
@@ -66,7 +75,74 @@ class PollRemovalTest extends PollTestCase
         $this->assertNull($flight->removed_from_feed_at);
         $this->assertCount(3, $this->versions(self::WB711));
         $this->assertSame(1, (int) $this->versions(self::WB711)[2]->in_feed);
-        $this->assertCount(1, $this->events(self::WB711, 'returned_to_feed'));
+        $returned = $this->events(self::WB711, 'returned_to_feed');
+        $this->assertCount(1, $returned);
+        $this->assertSame('system', $returned[0]->source);
+        $this->assertSame('system', $this->versions(self::WB711)[2]->cause);
+        $this->assertSame('aodb', $this->events(self::WB711, 'first_seen')[0]->source);
+    }
+
+    public function test_return_with_field_changes_is_one_aodb_version(): void
+    {
+        $this->poll();
+        $this->aodb->scriptById(fn (array $ids) => []);
+        $this->poll(self::without($this->sample(), self::WB711));
+
+        $payload = $this->sample();
+        self::record($payload, self::WB711)->status = 'TERMINATED';
+        $this->poll($payload);
+
+        $versions = $this->versions(self::WB711);
+        $this->assertCount(3, $versions);
+        $this->assertSame('aodb', $versions[2]->cause);
+        $events = collect($this->events(self::WB711))->where('version_id', $versions[2]->id);
+        $this->assertSame([['field_changed', 'aodb'], ['returned_to_feed', 'system']],
+            $events->map(fn ($e) => [$e->kind, $e->source])->values()->all());
+    }
+
+    public function test_byid_answers_are_stored_per_endpoint_and_reused_when_identical(): void
+    {
+        $this->poll();
+        $this->aodb->scriptById(fn (array $ids) => []);
+        $this->poll(self::without($this->sample(), self::WB711));
+        $this->travel(5)->minutes();
+
+        $poll = $this->poll(self::without(self::without($this->sample(), self::WB711), self::KQ470));
+
+        $this->assertSame(1, (int) $poll->flights_removed);
+        $byid = DB::table('raw_responses')->where('endpoint', '/flights/v1/byid')->get();
+        $this->assertCount(1, $byid, 'identical byid answer: the stored row is reused');
+        $this->assertSame('raw_responses:'.$byid[0]->id, $this->events(self::KQ470, 'removed_from_feed')[0]->source_ref);
+        $this->assertSame(3, DB::table('raw_responses')->where('endpoint', '/flights/v1/airport')->count());
+    }
+
+    public function test_byid_answer_with_the_moved_flight_is_stored(): void
+    {
+        $this->poll();
+        $moved = self::record($this->sample(), self::WB711);
+        $moved->sibt = '2026-10-29T08:30:00Z';
+        $this->aodb->scriptById(fn (array $ids) => [$moved]);
+
+        $this->poll(self::without($this->sample(), self::WB711));
+
+        $raw = DB::table('raw_responses')->where('endpoint', '/flights/v1/byid')->sole();
+        $this->assertSame('2026-10-29T08:30:00Z', json_decode(gzdecode($raw->body))->flights[0]->sibt);
+    }
+
+    public function test_removal_pre_filter_uses_the_in_feed_reference_time_index(): void
+    {
+        $this->poll();
+        $this->aodb->scriptById(fn (array $ids) => []);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->poll(self::without($this->sample(), self::WB711));
+        DB::disableQueryLog();
+
+        $query = collect(DB::getQueryLog())->first(fn ($q) => str_contains($q['query'], 'flights_in_feed_reference_time_index'));
+        $this->assertNotNull($query);
+        $plan = DB::select('EXPLAIN '.$query['query'], $query['bindings']);
+        $this->assertSame('flights_in_feed_reference_time_index', $plan[0]->key);
     }
 
     public function test_byid_error_concludes_nothing(): void

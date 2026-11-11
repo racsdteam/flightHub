@@ -35,7 +35,16 @@ distributes it to other RAC systems through its own API.
    databases as DDL (the two migrate commands above), then run apply-grants.sh.
    Verify with `php artisan hub:check-grants` and `php artisan hub:check-grants --env=testing`.
 
-5. Run the tests on PHP 8.3 (Homebrew php@8.3, or set `PHP83_BIN`; MariaDB database
+5. Poll locally without the live API (no AODB credentials exist on this Mac): the
+   fixture client serves the newest file in `tests/Fixtures/aodb/`. It is refused when
+   APP_ENV=production.
+
+       AODB_CLIENT=fixture php artisan hub:poll
+
+   A second run with the same fixture reports "content unchanged" and writes only
+   `last_seen_at`. The flights land in the dev database `flighthub`.
+
+6. Run the tests on PHP 8.3 (Homebrew php@8.3, or set `PHP83_BIN`; MariaDB database
    `flighthub_test`, never SQLite):
 
        composer test

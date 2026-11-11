@@ -30,8 +30,8 @@ return [
     'window_days_before' => (int) (env('AODB_WINDOW_DAYS_BEFORE') ?? 1),
     'window_days_after' => (int) (env('AODB_WINDOW_DAYS_AFTER') ?? 1),
 
-    // Every minute until Innov'ATM confirms the allowed rate.
-    'poll_cron' => env('AODB_POLL_CRON') ?: '* * * * *',
+    // Every 5 minutes for now (D-030): change times are precise to 5 minutes.
+    'poll_cron' => env('AODB_POLL_CRON') ?: '*/5 * * * *',
 
     // No login is tried for this long after a failed login: wrong logins every
     // minute could lock RAC's account.

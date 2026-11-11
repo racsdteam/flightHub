@@ -43,7 +43,7 @@ class RetentionAndScheduleTest extends TestCase
         $events = collect(app(Schedule::class)->events())->keyBy(fn (Event $e) => trim(substr($e->command, strpos($e->command, 'artisan') + 8), " '"));
 
         $poll = $events['hub:poll'];
-        $this->assertSame('* * * * *', $poll->expression);
+        $this->assertSame('*/5 * * * *', $poll->expression);
         $this->assertTrue($poll->withoutOverlapping);
         $this->assertSame(5, $poll->expiresAt);
 

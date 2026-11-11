@@ -28,6 +28,10 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
 ## Git
 - Never commit anything under docs/. Never git add -f. Never --no-verify.
 - Hooks: .githooks/ (git config core.hooksPath .githooks).
+- Commit messages and pull-request descriptions contain only Dany's text: a subject line
+  and an optional body. No trailer lines of the form "Something-by: …", no tool or AI
+  attribution of any kind. The author is Dany. (.claude/settings.json turns attribution
+  off; .githooks/commit-msg refuses it.)
 - Push only when the batch says so.
 
 ## Production target

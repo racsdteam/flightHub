@@ -131,7 +131,7 @@ final class Poller
 
         if (! $response->isOk()) {
             $this->poll['content_changed'] = $changed;
-            $this->poll['raw_response_id'] = $changed ? $this->storeRaw($response, $sha) : $last->id;
+            $this->poll['raw_response_id'] = $changed ? $this->storeRaw($response, $sha, withWindow: true) : $last->id;
 
             return $this->finish(AodbResponse::INVALID_PAYLOAD, $response->error);
         }
@@ -148,7 +148,7 @@ final class Poller
 
         $this->poll['content_changed'] = true;
         $this->warnUnknownFields($records);
-        [$missing, $byId] = $this->askAboutMissing($client, $records);
+        [$missing, $byId, $byIdAnswers] = $this->askAboutMissing($client, $records);
 
         $locked = (int) DB::selectOne('SELECT GET_LOCK(?, ?) AS l', [self::LOCK, $this->lockTimeout])->l === 1;
         if (! $locked) {
@@ -157,7 +157,7 @@ final class Poller
         }
 
         try {
-            return DB::transaction(fn () => $this->writeChanges($response, $sha, $records, $missing, $byId));
+            return DB::transaction(fn () => $this->writeChanges($response, $sha, $records, $missing, $byId, $byIdAnswers));
         } finally {
             DB::selectOne('SELECT RELEASE_LOCK(?) AS l', [self::LOCK]);
         }
@@ -210,13 +210,16 @@ final class Poller
      * In-feed flights missing from the payload whose last known OBT/TOT or
      * LDT/IBT lies at least 60 min inside the window are asked for by id.
      * Read-only, before the lock: no HTTP call while the lock is held.
+     * Returns the missing ids, the byid records (null when byid failed) and
+     * every byid answer (stored later as evidence).
      *
      * @param  array<string, stdClass>  $records
-     * @return array{0: list<string>, 1: array<string, stdClass>|null} missing ids, byid records (null: byid failed)
+     * @return array{0: list<string>, 1: array<string, stdClass>|null, 2: list<array{response: AodbResponse, ids: list<string>}>}
      */
     private function askAboutMissing(AodbClient $client, array $records): array
     {
         $candidates = DB::table('flights')
+            ->forceIndex('flights_in_feed_reference_time_index')
             ->where('in_feed', true)
             ->whereBetween('reference_time', [
                 $this->window->from->modify('-7 days')->format('Y-m-d H:i:s'),
@@ -232,16 +235,18 @@ final class Poller
         }
 
         if ($missing === []) {
-            return [[], []];
+            return [[], [], []];
         }
 
         $found = [];
+        $answers = [];
         foreach (array_chunk($missing, max(1, (int) config('aodb.byid_chunk'))) as $chunk) {
             $response = $client->flightsById($chunk);
+            $answers[] = ['response' => $response, 'ids' => $chunk];
             if (! $response->isOk()) {
                 $this->warn('byid_failed', null, (string) $response->error);
 
-                return [$missing, null];
+                return [$missing, null, $answers];
             }
             foreach ($response->flights as $record) {
                 $id = $record instanceof stdClass ? ($record->id ?? null) : null;
@@ -251,7 +256,7 @@ final class Poller
             }
         }
 
-        return [$missing, $found];
+        return [$missing, $found, $answers];
     }
 
     private function insideMargin(stdClass $record): bool
@@ -282,10 +287,22 @@ final class Poller
      * @param  array<string, stdClass>  $records
      * @param  list<string>  $missing
      * @param  array<string, stdClass>|null  $byId
+     * @param  list<array{response: AodbResponse, ids: list<string>}>  $byIdAnswers
      */
-    private function writeChanges(AodbResponse $response, string $sha, array $records, array $missing, ?array $byId): array
+    private function writeChanges(AodbResponse $response, string $sha, array $records, array $missing, ?array $byId, array $byIdAnswers): array
     {
-        $this->poll['raw_response_id'] = $this->storeRaw($response, $sha);
+        $this->poll['raw_response_id'] = $this->storeRaw($response, $sha, withWindow: true);
+
+        // byid evidence (D-008 per endpoint): which stored answer covered each asked id.
+        $evidence = [];
+        foreach ($byIdAnswers as ['response' => $answer, 'ids' => $ids]) {
+            if ($answer->hasBody()) {
+                $rawId = $this->storeRawUnlessSame($answer);
+                foreach ($ids as $id) {
+                    $evidence[$id] = $rawId;
+                }
+            }
+        }
 
         // byid answers are processed like any record (the flight moved; still in feed).
         $seen = $records;
@@ -312,7 +329,7 @@ final class Poller
             foreach ($missing as $id) {
                 $current = $stored[$id] ?? null;
                 if ($current !== null && ! isset($byId[$id]) && $current->in_feed) {
-                    $plans[] = $this->planRemoved($current);
+                    $plans[] = $this->planRemoved($current, $evidence[$id] ?? null);
                 }
             }
         }
@@ -342,7 +359,7 @@ final class Poller
             $events[] = $this->event('field_changed', $path, self::json($aodbValue), self::json($servedValue), 'correction', $ref);
         }
 
-        return ['aodb_id' => $id, 'current' => null, 'columns' => $flight->columns, 'in_feed' => true, 'events' => $events];
+        return ['aodb_id' => $id, 'current' => null, 'columns' => $flight->columns, 'in_feed' => true, 'cause' => 'aodb', 'events' => $events];
     }
 
     /**
@@ -377,8 +394,9 @@ final class Poller
             $this->poll['flights_changed']++;
         }
 
+        // Returning to the feed is the hub's own conclusion: source system.
         if (! $current->in_feed) {
-            $events[] = $this->event('returned_to_feed', null, null, null, 'aodb');
+            $events[] = $this->event('returned_to_feed', null, null, null, 'system');
             $this->poll['flights_returned']++;
         }
 
@@ -386,10 +404,22 @@ final class Poller
             return null;
         }
 
-        return ['aodb_id' => $current->aodb_id, 'current' => $current, 'columns' => $flight->columns, 'in_feed' => true, 'events' => $events];
+        // A version that carries AODB field changes is caused by the AODB; a bare return by the hub.
+        return [
+            'aodb_id' => $current->aodb_id,
+            'current' => $current,
+            'columns' => $flight->columns,
+            'in_feed' => true,
+            'cause' => $recordChanged ? 'aodb' : 'system',
+            'events' => $events,
+        ];
     }
 
-    private function planRemoved(object $current): array
+    /**
+     * Removal is the hub's own conclusion: source and cause system; source_ref
+     * the stored byid answer that did not contain the flight.
+     */
+    private function planRemoved(object $current, ?int $evidenceRawId): array
     {
         $this->poll['flights_removed']++;
         $columns = [];
@@ -402,7 +432,8 @@ final class Poller
             'current' => $current,
             'columns' => $columns,
             'in_feed' => false,
-            'events' => [$this->event('removed_from_feed', null, null, null, 'aodb')],
+            'cause' => 'system',
+            'events' => [$this->event('removed_from_feed', null, null, null, 'system', $evidenceRawId === null ? null : 'raw_responses:'.$evidenceRawId)],
         ];
     }
 
@@ -432,7 +463,7 @@ final class Poller
             'version_no' => $versionNo,
             'valid_from' => $at,
             'poll_id' => $pollId,
-            'cause' => 'aodb',
+            'cause' => $plan['cause'],
             'in_feed' => $plan['in_feed'],
         ]);
 
@@ -484,7 +515,19 @@ final class Poller
         return $value === null ? null : json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     }
 
-    private function storeRaw(AodbResponse $response, string $sha): int
+    /**
+     * A byid answer is stored unless it equals the last stored raw of the same
+     * endpoint (D-008); then that row is reused.
+     */
+    private function storeRawUnlessSame(AodbResponse $response): int
+    {
+        $sha = $response->payload !== null ? CanonicalJson::sha256($response->payload) : hash('sha256', (string) $response->body);
+        $last = DB::table('raw_responses')->where('endpoint', $response->endpoint)->orderByDesc('id')->first(['id', 'sha256']);
+
+        return $last !== null && $last->sha256 === $sha ? (int) $last->id : $this->storeRaw($response, $sha, withWindow: false);
+    }
+
+    private function storeRaw(AodbResponse $response, string $sha, bool $withWindow): int
     {
         $gz = gzencode((string) $response->body, 6);
 
@@ -496,8 +539,8 @@ final class Poller
             'bytes_compressed' => strlen($gz),
             'http_status' => $response->httpStatus,
             'endpoint' => $response->endpoint,
-            'request_window_from' => $this->window->from->format('Y-m-d H:i:s'),
-            'request_window_to' => $this->window->to->format('Y-m-d H:i:s'),
+            'request_window_from' => $withWindow ? $this->window->from->format('Y-m-d H:i:s') : null,
+            'request_window_to' => $withWindow ? $this->window->to->format('Y-m-d H:i:s') : null,
         ]);
     }
 

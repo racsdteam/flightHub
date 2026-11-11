@@ -28,6 +28,8 @@ final class AodbResponse
 
     public const CONFIG_ERROR = 'config_error';
 
+    public const RATE_LIMITED = 'rate_limited';
+
     /**
      * @param  list<stdClass>|null  $flights  the "flights" array (each entry as decoded); null unless outcome ok
      * @param  mixed  $payload  the whole decoded body (2xx and JSON only), for the canonical hash

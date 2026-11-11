@@ -12,6 +12,10 @@ use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
+use ReflectionMethod;
+use RuntimeException;
+use SensitiveParameter;
+use SensitiveParameterValue;
 use Tests\TestCase;
 
 /**
@@ -342,6 +346,135 @@ class HttpAodbClientTest extends TestCase
             $this->assertStringNotContainsString(explode('.', $token)[1], $haystack);
             $this->assertStringNotContainsString('Bearer', $haystack);
         }
+    }
+
+    public function test_429_with_retry_after_seconds_pauses_every_request(): void
+    {
+        Http::fake([
+            self::LOGIN => self::loginOk(self::jwt()),
+            self::AIRPORT => Http::sequence()->pushResponse(Http::response('{"error":"TOO_MANY"}', 429, ['Retry-After' => '120']))->push(['flights' => []]),
+        ]);
+
+        $first = $this->client()->flightsAtAirport($this->window());
+        $this->assertSame(['rate_limited', '429 TOO_MANY'], [$first->outcome, $first->error]);
+
+        $this->travel(119)->seconds();
+        $this->assertSame('rate_limited', $this->client()->flightsAtAirport($this->window())->outcome);
+        $this->assertSame([1, 1], [$this->loginCount(), $this->dataGetCount()]);
+
+        $this->travel(2)->seconds();
+        $this->assertSame('ok', $this->client()->flightsAtAirport($this->window())->outcome);
+        $this->assertSame(2, $this->dataGetCount());
+    }
+
+    public function test_429_with_retry_after_http_date(): void
+    {
+        $until = now()->addMinutes(10);
+        Http::fake([
+            self::LOGIN => self::loginOk(self::jwt()),
+            self::AIRPORT => Http::sequence()->pushResponse(Http::response('', 429, ['Retry-After' => $until->format(DATE_RFC7231)]))->push(['flights' => []]),
+        ]);
+
+        $this->assertSame('rate_limited', $this->client()->flightsAtAirport($this->window())->outcome);
+
+        $this->travel(9)->minutes();
+        $this->assertSame('rate_limited', $this->client()->flightsAtAirport($this->window())->outcome);
+        $this->assertSame(1, $this->dataGetCount());
+
+        $this->travel(61)->seconds();
+        $this->assertSame('ok', $this->client()->flightsAtAirport($this->window())->outcome);
+    }
+
+    public function test_429_without_retry_after_pauses_five_minutes(): void
+    {
+        Http::fake([
+            self::LOGIN => self::loginOk(self::jwt()),
+            self::AIRPORT => Http::sequence()->pushResponse(Http::response('', 429))->push(['flights' => []]),
+        ]);
+
+        $this->assertSame(['rate_limited', '429'], [$this->client()->flightsAtAirport($this->window())->outcome, '429']);
+
+        $this->travel(299)->seconds();
+        $this->assertSame('rate_limited', $this->client()->flightsAtAirport($this->window())->outcome);
+        $this->assertSame(1, $this->dataGetCount());
+
+        $this->travel(2)->seconds();
+        $this->assertSame('ok', $this->client()->flightsAtAirport($this->window())->outcome);
+    }
+
+    public function test_429_on_login_pauses_without_login_back_off(): void
+    {
+        Http::fake([self::LOGIN => Http::response('', 429, ['Retry-After' => '60'])]);
+
+        $this->assertSame('rate_limited', $this->client()->flightsAtAirport($this->window())->outcome);
+        $this->assertNull(Cache::get(HttpAodbClient::BACKOFF_KEY));
+
+        $this->assertSame('rate_limited', $this->client()->flightsById(['x'])->outcome);
+        $this->assertSame(1, $this->loginCount());
+        $this->assertSame(0, $this->dataGetCount());
+    }
+
+    public function test_poll_during_the_pause_is_rate_limited_without_request(): void
+    {
+        $this->app->forgetInstance(AodbClient::class);
+        Http::fake([self::LOGIN => self::loginOk(self::jwt()), self::AIRPORT => Http::response('', 429, ['Retry-After' => '600'])]);
+
+        $this->artisan('hub:poll')->run();
+        $this->travel(5)->minutes();
+        $this->artisan('hub:poll')->run();
+
+        $this->assertSame(['rate_limited', 'rate_limited'], DB::table('polls')->orderBy('id')->pluck('outcome')->all());
+        $this->assertSame(['429', 'rate_limited'], DB::table('polls')->orderBy('id')->pluck('error_summary')->all());
+        $this->assertSame([1, 1], [$this->loginCount(), $this->dataGetCount()]);
+    }
+
+    public function test_token_and_config_never_appear_in_a_stack_trace(): void
+    {
+        $previous = ini_set('zend.exception_ignore_args', '0');
+        $token = self::jwt(sub: 'trace-subject');
+        Http::fake([self::LOGIN => self::loginOk($token), self::AIRPORT => fn () => throw new RuntimeException('boom inside send')]);
+
+        try {
+            $this->client()->flightsAtAirport($this->window());
+            $this->fail('Expected the exception thrown inside send().');
+        } catch (RuntimeException $e) {
+            $send = collect($e->getTrace())->first(fn ($f) => ($f['class'] ?? null) === HttpAodbClient::class && $f['function'] === 'send');
+            $this->assertNotNull($send, 'send() is in the trace');
+            $this->assertArrayHasKey('args', $send, 'arguments are recorded (exception_ignore_args=0)');
+            $this->assertSame('/flights/v1/airport', $send['args'][0]);
+            $this->assertInstanceOf(SensitiveParameterValue::class, $send['args'][2]);
+
+            $this->assertStringNotContainsString($token, $e->getTraceAsString());
+            $this->assertStringNotContainsString(substr($token, 0, 15), $e->getTraceAsString());
+            foreach (self::scalars($e->getTrace()) as $value) {
+                $this->assertStringNotContainsString($token, $value);
+                $this->assertStringNotContainsString(self::PASSWORD, $value);
+            }
+        } finally {
+            ini_set('zend.exception_ignore_args', (string) $previous);
+        }
+
+        foreach ([['__construct', 'config'], ['send', 'token'], ['tokenLifetime', 'token']] as [$method, $name]) {
+            $parameter = collect((new ReflectionMethod(HttpAodbClient::class, $method))->getParameters())->firstWhere('name', $name);
+            $this->assertNotEmpty($parameter->getAttributes(SensitiveParameter::class), "{$method}(\${$name}) is #[\\SensitiveParameter]");
+        }
+    }
+
+    /**
+     * Every string in trace arguments, arrays included (objects are not dumped by traces).
+     *
+     * @return list<string>
+     */
+    private static function scalars(mixed $value): array
+    {
+        if (is_string($value)) {
+            return [$value];
+        }
+        if (! is_array($value)) {
+            return [];
+        }
+
+        return array_merge([], ...array_map(self::scalars(...), array_values($value)));
     }
 
     /**
