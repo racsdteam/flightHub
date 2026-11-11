@@ -129,7 +129,7 @@ class PollChangesTest extends PollTestCase
 
         $this->poll($payload);
 
-        $events = $this->events(self::KQ478D, 'field_changed');
+        $events = array_values(array_filter($this->events(self::KQ478D, 'field_changed'), fn ($e) => $e->source === 'aodb'));
         $this->assertCount(1, $events);
         $this->assertSame('dlCodes.typeb', $events[0]->field);
         $this->assertSame([['code' => '93', 'delay' => 1, 'info' => null]], json_decode($events[0]->old_value, true));

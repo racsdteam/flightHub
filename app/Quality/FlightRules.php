@@ -35,13 +35,24 @@ final class FlightRules
 
     public const CAPACITY_MISSING = 'capacity_missing';
 
+    public const NO_TIMES = 'no_times';
+
+    public const STAND_UNKNOWN = 'stand_unknown';
+
+    /** no_times applies to flights seen within this many hours. */
+    public const NO_TIMES_SEEN_HOURS = 24;
+
     /** Statuses after which a missing actual is not a quality problem. */
     private const NO_ACTUAL_EXEMPT = ['IN_FLIGHT', 'TERMINATED', 'CANCELLED'];
 
     /**
      * @param  array<string, int>  $thresholds  config('quality')
+     * @param  list<string>  $stands  active stands codes; empty = stand_unknown inactive
      */
-    public function __construct(private readonly array $thresholds) {}
+    public function __construct(
+        private readonly array $thresholds,
+        private readonly array $stands = [],
+    ) {}
 
     /**
      * Every condition true for one flight now (duplicates excluded).
@@ -116,6 +127,16 @@ final class FlightRules
                     'minutes_after_estimate' => (int) $estimate->diffInMinutes($now),
                 ]);
             }
+        }
+
+        // No window position: no time at all, yet seen recently.
+        if ($flight->reference_time === null && $flight->in_feed
+            && CarbonImmutable::parse($flight->last_seen_at, 'UTC')->gte($now->subHours(self::NO_TIMES_SEEN_HOURS))) {
+            $conditions[] = new Condition(self::NO_TIMES, null, null, ['last_seen_at' => self::iso(CarbonImmutable::parse($flight->last_seen_at, 'UTC'))]);
+        }
+
+        if ($this->stands !== [] && $flight->pkg !== null && ! in_array($flight->pkg, $this->stands, true)) {
+            $conditions[] = new Condition(self::STAND_UNKNOWN, null, null, ['pkg' => $flight->pkg]);
         }
 
         if ($flight->ac_type_icao === null) {

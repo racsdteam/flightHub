@@ -6,6 +6,7 @@ use App\Aodb\CanonicalJson;
 use App\Flights\ReferenceTime;
 use DateTimeImmutable;
 use DateTimeZone;
+use Illuminate\Support\Facades\DB;
 use stdClass;
 
 /**
@@ -16,7 +17,9 @@ use stdClass;
  * poll carries on (D-027). Twins <field>_aodb hold the value as received;
  * served columns equal the twins, then airport_code_corrections apply to
  * adepIata / adesIata, also filling the ICAO code when the record has none.
- * GHR operator contact details are stripped before anything else (D-035).
+ * Missing ICAO type, type name and wake category are filled from the
+ * reviewed aircraft_types (D-033; capacity never). GHR operator contact
+ * details are stripped before anything else (D-035).
  */
 final class FlightNormaliser
 {
@@ -72,6 +75,12 @@ final class FlightNormaliser
     /** ghrOperatorDetails keys removed at ingest (D-035); name and id stay. */
     public const STRIPPED_GHR_FIELDS = ['email', 'phone', 'address', 'zipcode', 'city'];
 
+    /** Hub-owned served values: not from the record; every version copies them from the flight. */
+    public const HUB_COLUMNS = ['same_as_flight_id', 'rotation_next_flight_id', 'rotation_prev_flight_id', 'rotation_source'];
+
+    /** Served column → aircraft_types column filled when the AODB value is missing (D-033). */
+    private const TYPE_FILL = ['ac_type_icao' => 'ac_type_icao', 'ac_type_name' => 'type_name', 'wtc' => 'wtc'];
+
     /** Airport sides a correction applies to: IATA served column → ICAO served column. */
     private const CORRECTED_SIDES = ['adep_iata' => 'adep_icao', 'ades_iata' => 'ades_icao'];
 
@@ -85,8 +94,24 @@ final class FlightNormaliser
 
     /**
      * @param  array<string, object>  $corrections  active airport_code_corrections rows by aodb_value
+     * @param  array<string, object>  $aircraftTypes  active aircraft_types rows by "airline_iata|ac_type_iata"
      */
-    public function __construct(private readonly array $corrections) {}
+    public function __construct(
+        private readonly array $corrections,
+        private readonly array $aircraftTypes = [],
+    ) {}
+
+    /**
+     * Normaliser over the active reference data.
+     */
+    public static function fromDatabase(): self
+    {
+        return new self(
+            DB::table('airport_code_corrections')->where('active', true)->get()->keyBy('aodb_value')->all(),
+            DB::table('aircraft_types')->where('active', true)->get()
+                ->keyBy(fn ($row) => $row->airline_iata.'|'.$row->ac_type_iata)->all(),
+        );
+    }
 
     /**
      * A copy of the record without the GHR operator contact details (D-035),
@@ -129,6 +154,20 @@ final class FlightNormaliser
             if ($columns[$icao] === null && $row->corrected_icao !== null) {
                 $columns[$icao] = $row->corrected_icao;
                 $corrections[self::SERVED[$icao][1]] = $ref;
+            }
+        }
+
+        // Type fill: the airline's own row first, else '*'.
+        $airline = $columns['airline_iata'];
+        $acType = $columns['ac_type_iata'];
+        $type = $acType === null ? null
+            : ($this->aircraftTypes[$airline.'|'.$acType] ?? $this->aircraftTypes['*|'.$acType] ?? null);
+        if ($type !== null) {
+            foreach (self::TYPE_FILL as $served => $source) {
+                if ($columns[$served] === null && $type->{$source} !== null) {
+                    $columns[$served] = $type->{$source};
+                    $corrections[self::SERVED[$served][1]] = 'aircraft_types:'.$type->id;
+                }
             }
         }
 

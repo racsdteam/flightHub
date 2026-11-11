@@ -38,8 +38,9 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
 - Laravel 12, PHP 8.3 (/usr/local/bin/ea-php83): no PHP 8.4+ syntax. MariaDB 10.11.19.
   AlmaLinux / cPanel / CloudLinux, dedicated server at AOS.
 - No Node and no SSH on the server. Deploy: maintenance on → git pull → composer install
-  --no-dev → migrate as DDL user → grants (Dany, as root, when tables changed) → caches
-  (route cache allowed: served at the subdomain root) → preflight → up.
+  --no-dev → migrate as DDL user → grants (Dany, as root, when tables changed) →
+  php artisan hub:reapply-corrections (whenever reference data changed) → caches (route
+  cache allowed: served at the subdomain root) → preflight → up.
   No Node anywhere: CSS is hand-written and committed (D-018).
 - cPanel cron runs the scheduler every minute. No daemons, no long-running queue workers.
   Scheduled commands use withoutOverlapping and finish well inside their interval.
@@ -93,8 +94,19 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
 - Removal: a flight missing from a poll is removed only if one of its OBT/TOT or
   LDT/IBT times lies at least 60 min inside the window AND /flights/v1/byid does not
   return it.
-- Hub-owned fields use the "hub." prefix in change events (hub.sameAs); their values are
-  aodb_ids, never internal ids.
+- Hub-owned fields use the "hub." prefix in change events (hub.sameAs, hub.rotationNext,
+  hub.rotationPrev); their values are aodb_ids, never internal ids.
+- Rotations: arrival → next departure, departure → previous arrival, for flights in the
+  poll window, in the poll transaction. linkedId to a known flight wins (source aodb);
+  otherwise by registration: the next departure with the same reg after the arrival's
+  in-block time (aibt, else eibt, else sibt), within 24 h, with no other arrival of that
+  reg in between (source system). A link that no longer holds is removed (event with null).
+- Type fill (D-033): a missing served ICAO type, type name or wake category comes from the
+  active aircraft_types row (the airline's own row, else '*'); twins keep the AODB value;
+  correction events source correction, source_ref "aircraft_types:<id>". Capacity is never
+  filled.
+- Reference rows (airport_code_corrections, aircraft_types, stands) are added only after
+  Dany's review, each batch in its own migration; then hub:reapply-corrections.
 - GHR contact stripping (D-035): ghrOperatorDetails email, phone, address, zipcode and city
   are removed before a record is stored, compared or put in an event; name and id stay;
   raw responses keep them for 90 days.

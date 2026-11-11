@@ -39,6 +39,9 @@ return [
 
     'byid_chunk' => (int) (env('AODB_BYID_CHUNK') ?: 50),
 
+    // Rotation by registration: the next departure within this many hours of in-block.
+    'rotation_max_hours' => (int) (env('ROTATION_MAX_HOURS') ?: 24),
+
     'fixture_path' => base_path('tests/Fixtures/aodb'),
 
 ];

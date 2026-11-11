@@ -11,6 +11,7 @@ use App\Flights\Window;
 use App\Quality\QualityEvaluator;
 use Carbon\CarbonImmutable;
 use Closure;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use stdClass;
@@ -50,6 +51,9 @@ final class Poller
 
     /** @var list<array{code: string, aodb_id?: string, detail?: string}> */
     private array $warnings = [];
+
+    /** @var array<string, int> aodb_id → flights.id, for rotation links */
+    private array $flightIds = [];
 
     private int $droppedWarnings = 0;
 
@@ -323,8 +327,7 @@ final class Poller
             $seen[$id] = $record;
         }
 
-        $corrections = DB::table('airport_code_corrections')->where('active', true)->get()->keyBy('aodb_value')->all();
-        $normaliser = new FlightNormaliser($corrections);
+        $normaliser = FlightNormaliser::fromDatabase();
         $stored = DB::table('flights')->whereIn('aodb_id', [...array_keys($seen), ...$missing])->get()->keyBy('aodb_id');
 
         $plans = [];
@@ -347,9 +350,19 @@ final class Poller
             }
         }
 
+        // Rotations change in the same plans: one version per flight per poll.
+        $this->planRotations($plans);
+
         $this->poll['events_written'] = array_sum(array_map(fn ($plan) => count($plan['events']), $plans));
         $pollId = $this->insertPoll(AodbResponse::OK);
 
+        // New flights first, so rotation links can point at them.
+        foreach ($plans as $i => $plan) {
+            if ($plan['current'] === null) {
+                $plans[$i]['flight_id'] = $this->insertFlight($plan);
+                $this->flightIds[$plan['aodb_id']] = $plans[$i]['flight_id'];
+            }
+        }
         foreach ($plans as $plan) {
             $this->write($plan, $pollId);
         }
@@ -451,31 +464,154 @@ final class Poller
         ];
     }
 
+    /**
+     * Rotation links (RotationLinker) for the poll window, from the stored
+     * flights overlaid with this poll's plans. A changed link is merged into
+     * the flight's plan, or becomes a plan of its own (cause aodb when the
+     * link comes from linkedId, else system).
+     *
+     * @param  list<array>  $plans
+     */
+    private function planRotations(array &$plans): void
+    {
+        $hours = (int) config('aodb.rotation_max_hours');
+        $planned = [];
+        foreach ($plans as $i => $plan) {
+            $planned[$plan['aodb_id']] = $i;
+        }
+
+        $rows = $this->rotationRows(fn ($q) => $q
+            ->where(fn ($q) => $q->where('f.in_feed', true)->whereBetween('f.reference_time', [
+                $this->window->from->modify("-{$hours} hours")->format('Y-m-d H:i:s'),
+                $this->window->to->modify("+{$hours} hours")->format('Y-m-d H:i:s'),
+            ]))
+            ->orWhereIn('f.aodb_id', array_keys($planned)));
+
+        // Counterparts and linked flights not loaded yet.
+        $more = [];
+        $wanted = [];
+        foreach ($rows as $row) {
+            array_push($wanted, $row->next_aodb, $row->prev_aodb, $row->linked_id);
+        }
+        foreach ($plans as $plan) {
+            $wanted[] = $plan['columns']['linked_id'];
+        }
+        foreach ($wanted as $id) {
+            if ($id !== null && ! isset($rows[$id])) {
+                $more[$id] = true;
+            }
+        }
+        if ($more !== []) {
+            $rows = $rows->merge($this->rotationRows(fn ($q) => $q->whereIn('f.aodb_id', array_keys($more))));
+        }
+
+        $flights = [];
+        foreach ($rows as $id => $row) {
+            $this->flightIds[$id] = (int) $row->id;
+            $flights[$id] = self::rotationSnapshot((array) $row, (bool) $row->in_feed, $row->next_aodb, $row->prev_aodb, $row->rotation_source);
+        }
+        foreach ($plans as $plan) {
+            $row = $rows[$plan['aodb_id']] ?? null;
+            $flights[$plan['aodb_id']] = self::rotationSnapshot($plan['columns'], $plan['in_feed'], $row?->next_aodb, $row?->prev_aodb, $row?->rotation_source);
+        }
+
+        $from = $this->window->from->format('Y-m-d H:i:s');
+        $to = $this->window->to->format('Y-m-d H:i:s');
+        $window = [];
+        foreach ($flights as $id => $flight) {
+            if ($flight['reference_time'] !== null && $flight['reference_time'] >= $from && $flight['reference_time'] < $to) {
+                $window[$id] = true;
+            }
+        }
+
+        foreach ((new RotationLinker($hours))->changes($flights, $window) as $id => $change) {
+            $eventSource = $change['source'] === 'aodb' ? 'aodb' : 'system';
+            if (! isset($planned[$id])) {
+                $row = $rows[$id];
+                $columns = [];
+                foreach (FlightNormaliser::versionColumns() as $column) {
+                    $columns[$column] = $row->{$column};
+                }
+                $plans[] = ['aodb_id' => $id, 'current' => $row, 'columns' => $columns, 'in_feed' => (bool) $row->in_feed, 'cause' => $eventSource, 'events' => []];
+                $planned[$id] = array_key_last($plans);
+            }
+
+            $plans[$planned[$id]]['rotation'] = $change;
+            $plans[$planned[$id]]['events'][] = $this->event(
+                'field_changed',
+                $change['field'] === 'next' ? 'hub.rotationNext' : 'hub.rotationPrev',
+                self::json($change['from']),
+                self::json($change['to']),
+                $eventSource,
+            );
+        }
+    }
+
+    private function rotationRows(Closure $where): Collection
+    {
+        return DB::table('flights as f')
+            ->leftJoin('flights as n', 'n.id', '=', 'f.rotation_next_flight_id')
+            ->leftJoin('flights as p', 'p.id', '=', 'f.rotation_prev_flight_id')
+            ->where($where)
+            ->get(['f.*', 'n.aodb_id as next_aodb', 'p.aodb_id as prev_aodb'])
+            ->keyBy('aodb_id');
+    }
+
+    private static function rotationSnapshot(array $columns, bool $inFeed, ?string $next, ?string $prev, ?string $source): array
+    {
+        return [
+            'flow' => $columns['flow'],
+            'reg' => $columns['reg'],
+            'linked_id' => $columns['linked_id'],
+            'reference_time' => $columns['reference_time'],
+            'aibt' => $columns['aibt'],
+            'eibt' => $columns['eibt'],
+            'sibt' => $columns['sibt'],
+            'in_feed' => $inFeed,
+            'next' => $next,
+            'prev' => $prev,
+            'source' => $source,
+        ];
+    }
+
+    private function insertFlight(array $plan): int
+    {
+        $at = $this->observedAt->format('Y-m-d H:i:s.u');
+        $now = $this->observedAt->format('Y-m-d H:i:s');
+
+        return DB::table('flights')->insertGetId($plan['columns'] + [
+            'aodb_id' => $plan['aodb_id'],
+            'in_feed' => true,
+            'first_seen_at' => $at,
+            'last_seen_at' => $at,
+            'current_version_no' => 0,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+    }
+
     private function write(array $plan, int $pollId): void
     {
         $at = $this->observedAt->format('Y-m-d H:i:s.u');
         $now = $this->observedAt->format('Y-m-d H:i:s');
         $current = $plan['current'];
         $versionNo = $current === null ? 1 : $current->current_version_no + 1;
+        $flightId = $plan['flight_id'] ?? $current->id;
 
-        if ($current === null) {
-            $flightId = DB::table('flights')->insertGetId($plan['columns'] + [
-                'aodb_id' => $plan['aodb_id'],
-                'in_feed' => true,
-                'first_seen_at' => $at,
-                'last_seen_at' => $at,
-                'current_version_no' => 0,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ]);
-        } else {
-            $flightId = $current->id;
+        // Hub-owned served values: carried over unless this plan changes a rotation.
+        $hub = [];
+        foreach (FlightNormaliser::HUB_COLUMNS as $column) {
+            $hub[$column] = $current?->{$column};
+        }
+        if (isset($plan['rotation'])) {
+            $rotation = $plan['rotation'];
+            $hub[$rotation['field'] === 'next' ? 'rotation_next_flight_id' : 'rotation_prev_flight_id']
+                = $rotation['to'] === null ? null : $this->flightIds[$rotation['to']];
+            $hub['rotation_source'] = $rotation['source'];
         }
 
-        $versionId = DB::table('flight_versions')->insertGetId($plan['columns'] + [
+        $versionId = DB::table('flight_versions')->insertGetId($plan['columns'] + $hub + [
             'flight_id' => $flightId,
-            // Hub-owned served value: carried over, changed only by a resolution.
-            'same_as_flight_id' => $current?->same_as_flight_id,
             'version_no' => $versionNo,
             'valid_from' => $at,
             'poll_id' => $pollId,
@@ -483,7 +619,7 @@ final class Poller
             'in_feed' => $plan['in_feed'],
         ]);
 
-        DB::table('flights')->where('id', $flightId)->update($plan['columns'] + [
+        DB::table('flights')->where('id', $flightId)->update($plan['columns'] + $hub + [
             'in_feed' => $plan['in_feed'],
             'removed_from_feed_at' => $plan['in_feed'] ? null : $at,
             'last_seen_at' => $plan['in_feed'] ? $at : $current->last_seen_at,

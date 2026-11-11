@@ -24,9 +24,10 @@ class PollSampleTest extends PollTestCase
         $this->assertSame(51, DB::table('flights')->count());
         $this->assertSame(51, DB::table('flight_versions')->count());
         $this->assertSame(51, DB::table('change_events')->where('kind', 'first_seen')->count());
-        // Plus 4 correction events: adepIata and adepIcao of KQ470 and KQ478.
-        $this->assertSame(55, DB::table('change_events')->count());
-        $this->assertSame(55, (int) $poll->events_written);
+        // Plus 4 correction events (adepIata and adepIcao of KQ470 and KQ478) and 4 rotation
+        // events (WB464 ARR ↔ WB434 DEP, KQ478D ARR ↔ morning KQ479 DEP), in the same versions.
+        $this->assertSame(59, DB::table('change_events')->count());
+        $this->assertSame(59, (int) $poll->events_written);
 
         $raw = DB::table('raw_responses')->sole();
         $this->assertSame((int) $raw->id, (int) $poll->raw_response_id);

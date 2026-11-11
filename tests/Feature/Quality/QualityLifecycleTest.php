@@ -114,6 +114,29 @@ class QualityLifecycleTest extends PollTestCase
         $this->assertSame('flight removed from feed', DB::table('quality_flag_events')->where(['flag_id' => $flags[0]->id, 'kind' => 'cleared'])->value('note'));
     }
 
+    public function test_no_times_flags_an_in_feed_flight_without_any_time_seen_in_the_last_24h(): void
+    {
+        $payload = $this->sample();
+        $timeless = clone self::record($payload, self::WB711);
+        $timeless->id = 'no-times-0000-0000-0000-000000000001';
+        foreach (['sibt', 'eibt', 'eldt'] as $field) {
+            unset($timeless->{$field});
+        }
+        $payload->flights[] = $timeless;
+
+        $this->poll($payload);
+
+        $flags = DB::table('quality_flags')->where(['flight_id' => $this->flight($timeless->id)->id, 'state' => 'open'])->pluck('rule')->all();
+        $this->assertContains('no_times', $flags);
+        $this->assertNull($this->flight($timeless->id)->reference_time);
+        $this->assertSame(1, DB::table('quality_flags')->where('rule', 'no_times')->count());
+
+        // Not seen for more than 24 h: no longer evaluated, the flag stays as it was.
+        $this->travel(25)->hours();
+        $this->poll(self::without($this->sample(), $timeless->id));
+        $this->assertSame('open', DB::table('quality_flags')->where('rule', 'no_times')->value('state'));
+    }
+
     public function test_evaluation_runs_only_after_an_ok_poll(): void
     {
         $this->poll('not json');

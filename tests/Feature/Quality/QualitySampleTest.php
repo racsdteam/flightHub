@@ -72,7 +72,7 @@ class QualitySampleTest extends PollTestCase
         $tk606Arr = DB::table('flights')->where(['full_flight_number' => 'TK606', 'flow' => 'ARR'])->orderBy('id')->get();
         $a = DB::table('quality_flags')->where(['flight_id' => $tk606Arr[0]->id, 'rule' => 'duplicate_suspected'])->sole();
         $this->assertSame((int) $tk606Arr[1]->id, (int) $a->related_flight_id);
-        $this->assertSame('duplicate_suspected||'.$tk606Arr[1]->aodb_id, $a->flag_key);
+        $this->assertSame('duplicate_suspected||'.$tk606Arr[1]->id, $a->flag_key);
         $this->assertSame($tk606Arr[1]->aodb_id, json_decode($a->details)->related_aodb_id);
 
         $kq479 = DB::table('flights')->where(['full_flight_number' => 'KQ479', 'flow' => 'DEP'])->pluck('id');

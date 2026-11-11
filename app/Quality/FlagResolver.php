@@ -92,9 +92,10 @@ final class FlagResolver
         $versionNo = $flight->current_version_no + 1;
 
         $columns = [];
-        foreach (FlightNormaliser::versionColumns() as $column) {
+        foreach ([...FlightNormaliser::versionColumns(), ...FlightNormaliser::HUB_COLUMNS] as $column) {
             $columns[$column] = $flight->{$column};
         }
+        $columns['same_as_flight_id'] = $target;
 
         $versionId = DB::table('flight_versions')->insertGetId($columns + [
             'flight_id' => $flight->id,
@@ -103,7 +104,6 @@ final class FlagResolver
             'poll_id' => null,
             'cause' => 'manual',
             'in_feed' => $flight->in_feed,
-            'same_as_flight_id' => $target,
         ]);
 
         DB::table('flights')->where('id', $flight->id)->update([

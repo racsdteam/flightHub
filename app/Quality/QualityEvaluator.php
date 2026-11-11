@@ -30,12 +30,19 @@ final class QualityEvaluator
     {
         $at = $now->format('Y-m-d H:i:s.u');
         $counts = ['evaluated' => 0, 'detected' => 0, 'cleared' => 0, 'reopened' => 0];
-        $rules = new FlightRules(config('quality'));
+        $stands = DB::table('stands')->where('active', true)->pluck('code')->all();
+        $rules = new FlightRules(config('quality'), $stands);
 
+        // The window set, plus in-feed flights with no time at all seen recently (no window position).
         $flights = DB::table('flights')
             ->where('in_feed', true)
-            ->where('reference_time', '>=', $window->from->format('Y-m-d H:i:s'))
-            ->where('reference_time', '<', $window->to->format('Y-m-d H:i:s'))
+            ->where(fn ($q) => $q
+                ->where(fn ($q) => $q
+                    ->where('reference_time', '>=', $window->from->format('Y-m-d H:i:s'))
+                    ->where('reference_time', '<', $window->to->format('Y-m-d H:i:s')))
+                ->orWhere(fn ($q) => $q
+                    ->whereNull('reference_time')
+                    ->where('last_seen_at', '>=', $now->subHours(FlightRules::NO_TIMES_SEEN_HOURS)->format('Y-m-d H:i:s.u'))))
             ->orderBy('id')
             ->get();
         $counts['evaluated'] = $flights->count();
@@ -44,6 +51,7 @@ final class QualityEvaluator
         $existing = DB::table('quality_flags')
             ->whereIn('flight_id', $flights->pluck('id')->all())
             ->get()
+            ->map(fn ($flag) => $this->rekey($flag))
             ->groupBy('flight_id');
 
         foreach ($flights as $flight) {
@@ -86,6 +94,21 @@ final class QualityEvaluator
         }
 
         return $counts;
+    }
+
+    /**
+     * Keys are recomputed at evaluation (rule|field|related flights.id), so a
+     * flag stored under an older key format keeps its history and resolution.
+     */
+    private function rekey(object $flag): object
+    {
+        $key = Condition::keyOf($flag->rule, $flag->field, $flag->related_flight_id);
+        if ($key !== $flag->flag_key) {
+            DB::table('quality_flags')->where('id', $flag->id)->update(['flag_key' => $key]);
+            $flag->flag_key = $key;
+        }
+
+        return $flag;
     }
 
     private function open(int $flightId, Condition $condition, string $at): void
