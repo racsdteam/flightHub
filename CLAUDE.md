@@ -129,6 +129,24 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
 - Never log, print, store unencrypted, or put in an exception message: the AODB password,
   the token, an Authorization header, or any /login request or response body.
 
+## Distribution API
+- /api/v1 (routes/api.php, registered in bootstrap/app.php; no Sanctum, no Passport): the
+  hub's own keys, "fdh_" + 8-char prefix + "_" + random; only the SHA-256 is stored; the key
+  is shown once (hub:key-issue).
+- The key is accepted in the Authorization header only (Bearer); a key in the query string
+  is ignored. Every refusal (missing, malformed, unknown, wrong, revoked, expired, inactive
+  consumer) is the same 401 {"error": "UNAUTHORIZED"}. Errors are JSON
+  {"error", "message"}, never a stack trace.
+- Field groups (config/api_fields.php, D-039) are deny-by-default: a field in no group is
+  never served, new AODB fields included; identity is always given. The same filter applies
+  to flights, history, first_seen values and /changes.
+- /changes: meta.nextCursor = the last event id SCANNED (not the last returned), so events
+  a consumer may not see never block it.
+- No internal ids in responses: flights are named by their AODB id, hub links carry AODB
+  ids, reference rows their natural keys.
+- Every call is logged in api_calls (append-only, 1 year, D-036), never the key or the
+  Authorization header.
+
 ## Security floor
 - Every permission enforced server-side, deny-by-default, with tests for the refused cases.
 - TOTP for every admin account; every admin action logged.

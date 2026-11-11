@@ -30,6 +30,12 @@ return [
         'quality_flags' => ['SELECT', 'INSERT', 'UPDATE'],
         'quality_flag_events' => ['SELECT', 'INSERT'],
 
+        // Distribution API: consumers and keys are disabled / revoked, never deleted;
+        // api_calls is append-only, DELETE only after 365 days (trigger).
+        'consumers' => ['SELECT', 'INSERT', 'UPDATE'],
+        'api_keys' => ['SELECT', 'INSERT', 'UPDATE'],
+        'api_calls' => ['SELECT', 'INSERT', 'DELETE'],
+
         'cache' => ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
         'cache_locks' => ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
         'sessions' => ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],

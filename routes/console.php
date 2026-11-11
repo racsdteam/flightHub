@@ -7,3 +7,6 @@ Schedule::command('hub:poll')->cron(config('aodb.poll_cron'))->withoutOverlappin
 
 // Raw responses are kept 90 days (D-008).
 Schedule::command('hub:prune-raw')->daily();
+
+// API call log kept 1 year (D-036).
+Schedule::command('hub:prune-api-calls')->daily();

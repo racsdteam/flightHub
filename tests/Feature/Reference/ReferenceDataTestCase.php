@@ -20,7 +20,7 @@ abstract class ReferenceDataTestCase extends PollTestCase
 
     private const TRUNCATED = [
         'change_events', 'flight_versions', 'quality_flag_events', 'quality_flags', 'flights',
-        'raw_responses', 'polls', 'aircraft_types', 'stands',
+        'raw_responses', 'polls', 'aircraft_types', 'stands', 'api_calls', 'api_keys', 'consumers',
     ];
 
     protected function tearDown(): void
