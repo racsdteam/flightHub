@@ -35,7 +35,8 @@ class ApiDocsPageTest extends TestCase
         $this->assertDoesNotMatchRegularExpression('#(https?:)?//#', $html, 'no absolute or protocol-relative URL');
         preg_match_all('/<script\b[^>]*>/', $html, $scripts);
         preg_match_all('/<(?:link|script)\b[^>]*(?:href|src)="([^"]+)"/', $html, $assets);
-        $this->assertSame(['/css/hub.css', '/vendor/swagger-ui/swagger-ui.css', '/vendor/swagger-ui/swagger-ui-bundle.js', '/js/api-docs.js'], $assets[1]);
+        $this->assertSame(['/images/favicon-32.png', '/images/apple-touch-icon-180.png', '/css/hub.css', '/vendor/swagger-ui/swagger-ui.css', '/vendor/swagger-ui/swagger-ui-bundle.js', '/js/api-docs.js'], $assets[1]);
+        $this->assertStringContainsString('<img src="/images/rac-logo-80.png" width="40" height="40" alt="Rwanda Airports Company">', $html, 'the RAC logo (D-053)');
         foreach ($assets[1] as $asset) {
             $this->assertFileExists(public_path(ltrim($asset, '/')));
         }
@@ -54,7 +55,8 @@ class ApiDocsPageTest extends TestCase
         $this->assertStringContainsString('persistAuthorization: false', $script);
         $this->assertStringContainsString('validatorUrl: null', $script);
         $this->assertStringContainsString('queryConfigEnabled: false', $script);
-        $this->assertStringContainsString('showExtensions: true', $script, 'x-field-group is shown');
+        $this->assertStringContainsString("docExpansion: 'list'", $script, 'operations listed, each collapsed');
+        $this->assertStringContainsString('defaultModelsExpandDepth: -1', $script, 'no Schemas section');
         $this->assertDoesNotMatchRegularExpression('#https?://#', $script);
     }
 
@@ -70,21 +72,21 @@ class ApiDocsPageTest extends TestCase
         $this->assertStringNotContainsString('unsafe-inline', $csp);
     }
 
-    public function test_the_document_is_served_as_committed_with_no_outside_url(): void
+    public function test_the_public_document_is_served_with_the_hubs_own_server_only(): void
     {
         $response = $this->get('/api/openapi.yaml')->assertOk();
 
         $this->assertGuest();
         $this->assertSame([], $response->headers->getCookies());
         $this->assertStringStartsWith('application/yaml', (string) $response->headers->get('Content-Type'));
-        $this->assertSame(file_get_contents(base_path(ApiDocsController::DOCUMENT)), $response->getContent());
+        $this->assertSame(ApiDocsController::served(), $response->getContent());
+        $this->assertStringContainsString('openapi: 3.1.0', $response->getContent());
         $this->assertNotNull($response->headers->get('Content-Security-Policy'));
 
-        // The only URLs are the hub's own servers.
+        // The only URL is the hub's own API address; the internal document is not served.
         preg_match_all('#https?://[^\s\'"]+#', $response->getContent(), $urls);
-        $found = array_values(array_unique(array_map(fn ($u) => rtrim($u, '.,)'), $urls[0])));
-        sort($found);
-        $this->assertSame(['http://127.0.0.1:8000/api/v1', 'https://flightdata.rac.co.rw/api/v1'], $found);
+        $this->assertSame([rtrim(config('app.url'), '/').'/api/v1'], array_values(array_unique($urls[0])));
+        $this->assertStringNotContainsString('/changes', $response->getContent());
     }
 
     public function test_the_consumers_screen_links_to_the_docs(): void

@@ -1,0 +1,259 @@
+# RAC Flight Data Hub API. The server address is added when this document is served.
+openapi: 3.1.0
+info:
+  title: RAC Flight Data Hub API
+  version: 1.0.0
+  description: |-
+    Flight data of Kigali International Airport (HRYR).
+    Send your key as `Authorization: Bearer <key>`. Times are UTC (ISO 8601).
+    You receive only the fields your key allows.
+security:
+  - apiKey: []
+tags:
+  - name: Flights
+paths:
+  /flights:
+    get:
+      tags: [Flights]
+      operationId: listFlights
+      summary: Flights of a day or a time window
+      parameters:
+        - $ref: '#/components/parameters/day'
+        - $ref: '#/components/parameters/from'
+        - $ref: '#/components/parameters/to'
+        - $ref: '#/components/parameters/flow'
+      responses:
+        '200':
+          description: The flights, in time order.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FlightList'}
+              examples:
+                arrivals:
+                  summary: One flight of the list
+                  value:
+                    data:
+                      - id: 0d5a9f54-8760-46e3-8f73-56f33647bd29
+                        flow: ARR
+                        flightNumber: '807'
+                        fullFlightNumber: ET807
+                        airlineIata: ET
+                        airlineIcao: ETH
+                        status: SCHEDULED
+                        milestone: null
+                        callsign: null
+                        sobt: null
+                        sibt: '2026-10-29T07:40:00Z'
+                        hub: {referenceTime: '2026-10-29T07:40:00Z', inFeed: true, sameAs: null}
+                    meta:
+                      asOf: '2026-10-29T07:42:30Z'
+                      feed: ok
+                      window: {from: '2026-10-28T22:00:00Z', to: '2026-10-29T22:00:00Z'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '422': {$ref: '#/components/responses/Invalid'}
+        '429': {$ref: '#/components/responses/TooMany'}
+  /flights/{id}:
+    get:
+      tags: [Flights]
+      operationId: getFlight
+      summary: One flight, optionally with its history
+      parameters:
+        - $ref: '#/components/parameters/id'
+        - $ref: '#/components/parameters/history'
+      responses:
+        '200':
+          description: The flight.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FlightOne'}
+              examples:
+                flight:
+                  summary: A flight
+                  value:
+                    data:
+                      id: 0d5a9f54-8760-46e3-8f73-56f33647bd29
+                      flow: ARR
+                      flightNumber: '807'
+                      fullFlightNumber: ET807
+                      airlineIata: ET
+                      airlineIcao: ETH
+                      status: SCHEDULED
+                      milestone: null
+                      callsign: null
+                      sobt: null
+                      sibt: '2026-10-29T07:40:00Z'
+                      hub: {referenceTime: '2026-10-29T07:40:00Z', inFeed: true, sameAs: null}
+                    meta: {asOf: '2026-10-29T07:42:30Z', feed: ok}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/Invalid'}
+        '429': {$ref: '#/components/responses/TooMany'}
+components:
+  securitySchemes:
+    apiKey: {type: http, scheme: bearer, description: Your API key.}
+  parameters:
+    day:
+      {name: day, in: query, description: 'A Kigali calendar day, YYYY-MM-DD (not with from and to).', schema: {type: string, format: date}}
+    from:
+      {name: from, in: query, description: 'Window start, ISO 8601 with a time zone (with to).', schema: {type: string, format: date-time}}
+    to:
+      {name: to, in: query, description: 'Window end, excluded; at most 7 days after from.', schema: {type: string, format: date-time}}
+    flow:
+      {name: flow, in: query, description: 'Only arrivals (ARR) or only departures (DEP).', schema: {type: string, enum: [ARR, DEP]}}
+    id:
+      {name: id, in: path, required: true, description: The flight id (id in the flight list)., schema: {type: string, pattern: '^[A-Za-z0-9._:-]{1,64}$'}}
+    history:
+      {name: history, in: query, description: '1 to add the changes of the flight.', schema: {type: string, enum: ['0', '1', 'false', 'true']}}
+  headers:
+    Retry-After: {description: Seconds to wait before the next call., required: true, schema: {type: integer, minimum: 1}}
+  responses:
+    Unauthorized:
+      description: Missing, wrong or disabled key.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    NotFound:
+      description: No flight with this id.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Invalid:
+      description: A parameter is missing or not valid.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    TooMany:
+      description: Too many calls; wait for Retry-After seconds.
+      headers: {Retry-After: {$ref: '#/components/headers/Retry-After'}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error: {type: string, description: 'A code, e.g. UNAUTHORIZED or INVALID_PARAMETER.'}
+        message: {type: string, description: A short explanation.}
+    Meta:
+      type: object
+      required: [asOf, feed]
+      properties:
+        asOf: {type: ['string', 'null'], format: date-time, description: When the hub last received fresh flight data.}
+        feed: {type: string, enum: [ok, stale], description: stale when that was over 15 minutes ago.}
+        window: {type: object, description: 'The window used, from (included) to (excluded).', properties: {from: {type: string, format: date-time}, to: {type: string, format: date-time}}}
+    FlightList:
+      type: object
+      required: [data, meta]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/Flight'}}
+        meta: {$ref: '#/components/schemas/Meta'}
+    FlightOne:
+      type: object
+      required: [data, meta]
+      properties:
+        data: {$ref: '#/components/schemas/Flight'}
+        history: {type: array, description: With history=1 only., items: {$ref: '#/components/schemas/HistoryEvent'}}
+        meta: {$ref: '#/components/schemas/Meta'}
+    HistoryEvent:
+      type: object
+      required: [cursor, observedAt, kind, field, old, new, source]
+      properties:
+        cursor: {type: integer, description: Position of the change; higher is later.}
+        observedAt: {type: string, format: date-time, description: When the change was seen.}
+        kind: {type: string, enum: [first_seen, field_changed, removed_from_feed, returned_to_feed], description: What happened.}
+        field: {type: ['string', 'null'], description: The field that changed (field_changed only).}
+        old: {description: The value before; null when there was none.}
+        new: {description: 'The value after; first_seen: the whole flight.'}
+        source: {type: string, enum: [aodb, correction, manual, system, backfill], description: Where the value came from.}
+    Hub:
+      type: object
+      description: Fields added by the hub.
+      required: [referenceTime, inFeed, sameAs]
+      properties:
+        referenceTime: {type: ['string', 'null'], format: date-time, description: 'The time that places the flight in a day.'}
+        inFeed: {type: boolean, description: false once the airport no longer lists the flight.}
+        sameAs: {type: ['string', 'null'], description: Id of the flight this one duplicates.}
+        rotationNext: {type: ['string', 'null'], description: 'Arrivals: id of the same aircraft''s next departure.'}
+        rotationPrev: {type: ['string', 'null'], description: 'Departures: id of the same aircraft''s previous arrival.'}
+        rotationSource: {type: ['string', 'null'], enum: [aodb, registration, null], description: How that link was made.}
+        minTurnaroundMinutes: {type: ['integer', 'null'], description: Minimum turnaround time of the aircraft type.}
+    Flight:
+      type: object
+      required: [id, flow, flightNumber, fullFlightNumber, airlineIata, airlineIcao, status, milestone, callsign, hub]
+      additionalProperties: false
+      properties:
+        id: {type: string, description: The flight's id.}
+        flow: {type: string, enum: [ARR, DEP], description: Arrival or departure.}
+        flightNumber: {type: ['string', 'null'], description: Flight number without the airline code.}
+        fullFlightNumber: {type: ['string', 'null'], description: 'Airline code and number, e.g. ET807.'}
+        airlineIata: {type: ['string', 'null'], description: Airline IATA code.}
+        airlineIcao: {type: ['string', 'null'], description: Airline ICAO code.}
+        status: {type: ['string', 'null'], description: 'SCHEDULED, IN_FLIGHT, TERMINATED, CANCELLED, SUSPENDED or NONE.'}
+        milestone: {type: ['string', 'null'], description: 'Progress step, e.g. LANDED or OFF_BLOCK.'}
+        callsign: {type: ['string', 'null'], description: ATC callsign.}
+        adepIata: {type: ['string', 'null'], description: Departure airport IATA code.}
+        adepIcao: {type: ['string', 'null'], description: Departure airport ICAO code.}
+        adesIata: {type: ['string', 'null'], description: Destination airport IATA code.}
+        adesIcao: {type: ['string', 'null'], description: Destination airport ICAO code.}
+        adepDetails: {type: ['object', 'null'], description: 'Departure airport name and first departure, if stopover.'}
+        adesDetails: {type: ['object', 'null'], description: 'Destination airport name and final arrival, if stopover.'}
+        divertedDetails: {type: ['object', 'null'], description: Filed and actual destination of a diverted flight.}
+        codeShare: {type: ['object', 'null'], description: Operating airline and code-share flight numbers.}
+        routeIcao: {type: ['string', 'null'], description: ICAO route.}
+        sobt: {type: ['string', 'null'], format: date-time, description: Scheduled off-block time (departures).}
+        sibt: {type: ['string', 'null'], format: date-time, description: Scheduled in-block time (arrivals).}
+        eobt: {type: ['string', 'null'], format: date-time, description: Estimated off-block time.}
+        etot: {type: ['string', 'null'], format: date-time, description: Estimated take-off time.}
+        aobt: {type: ['string', 'null'], format: date-time, description: Actual off-block time.}
+        atot: {type: ['string', 'null'], format: date-time, description: Actual take-off time.}
+        eldt: {type: ['string', 'null'], format: date-time, description: Estimated landing time.}
+        aldt: {type: ['string', 'null'], format: date-time, description: Actual landing time.}
+        eibt: {type: ['string', 'null'], format: date-time, description: Estimated in-block time.}
+        aibt: {type: ['string', 'null'], format: date-time, description: Actual in-block time.}
+        tobt: {type: ['string', 'null'], format: date-time, description: Target off-block time.}
+        tsat: {type: ['string', 'null'], format: date-time, description: Target start-up approval time.}
+        ttot: {type: ['string', 'null'], format: date-time, description: Target take-off time.}
+        ctot: {type: ['string', 'null'], format: date-time, description: Calculated take-off time (air traffic flow).}
+        pobt: {type: ['string', 'null'], format: date-time, description: Predicted off-block time.}
+        ardt: {type: ['string', 'null'], format: date-time, description: Aircraft ready time.}
+        asat: {type: ['string', 'null'], format: date-time, description: Actual start-up approval time.}
+        asrt: {type: ['string', 'null'], format: date-time, description: Actual start-up request time.}
+        efat: {type: ['string', 'null'], format: date-time, description: Estimated final approach time.}
+        afat: {type: ['string', 'null'], format: date-time, description: Actual final approach time.}
+        efet: {type: ['string', 'null'], format: date-time, description: Estimated airspace (FIR) entry time.}
+        afet: {type: ['string', 'null'], format: date-time, description: Actual airspace (FIR) entry time.}
+        eet: {type: ['integer', 'null'], description: Estimated flight duration in minutes.}
+        vtt: {type: ['object', 'null'], description: Estimated and actual taxi time in minutes.}
+        regulation: {type: ['object', 'null'], description: Air traffic flow regulation and its reason.}
+        pkg: {type: ['string', 'null'], description: Aircraft stand.}
+        gate: {type: ['string', 'null'], description: Boarding gate.}
+        gateDetails: {type: ['object', 'null'], description: Gate open and close times and status.}
+        terminal: {type: ['string', 'null'], description: Terminal.}
+        hall: {type: ['string', 'null'], description: Hall.}
+        counter: {type: ['string', 'null'], description: Check-in counters.}
+        carousel: {type: ['string', 'null'], description: Baggage belt.}
+        rwy: {type: ['string', 'null'], description: Runway.}
+        sid: {type: ['string', 'null'], description: Standard instrument departure procedure.}
+        bridge: {type: ['string', 'null'], description: Whether a boarding bridge is needed.}
+        bus: {type: ['string', 'null'], description: Whether a bus is needed.}
+        deicing: {type: ['boolean', 'null'], description: Whether de-icing is needed.}
+        zoneDetails: {type: ['object', 'null'], description: 'Passenger, parking and gate zones.'}
+        checkInDetails: {type: ['object', 'null'], description: Check-in open and close times and status.}
+        boardingDetails: {type: ['object', 'null'], description: Boarding start and end times and status.}
+        baggageCheckInDetails: {type: ['object', 'null'], description: Baggage check-in belt and inspection system.}
+        baggageDeliveryDetails: {type: ['object', 'null'], description: 'Baggage belt times, first and last bag.'}
+        borderControl: {type: ['string', 'null'], description: Border control point.}
+        securityCheckpoint: {type: ['string', 'null'], description: Security checkpoint.}
+        publicDisplayed: {type: ['boolean', 'null'], description: Whether the flight is shown on public screens.}
+        reg: {type: ['string', 'null'], description: Aircraft registration.}
+        acTypeIata: {type: ['string', 'null'], description: Aircraft type IATA code.}
+        acTypeIcao: {type: ['string', 'null'], description: Aircraft type ICAO code.}
+        aircraftDetails: {type: ['object', 'null'], description: 'Aircraft type name, wake category, maximum take-off weight.'}
+        paxCapa: {type: ['integer', 'null'], description: Passenger seats of the aircraft.}
+        mtt: {type: ['integer', 'null'], description: Minimum turnaround time in minutes.}
+        paxNb: {type: ['integer', 'null'], description: Number of passengers.}
+        paxDetails: {type: ['object', 'null'], description: 'Passengers by category (minors, reduced mobility, VIP).'}
+        bags: {type: ['integer', 'null'], description: Total baggage weight in kg.}
+        nationality: {type: ['string', 'null'], description: Nationality sector (domestic or international).}
+        trafficNature: {type: ['string', 'null'], description: 'Traffic type, e.g. passenger or cargo.'}
+        dlCodes: {type: ['object', 'null'], description: 'Delay codes, each with code, minutes and information.'}
+        remarks: {type: ['string', 'null'], description: Remarks on the flight.}
+        groundHandler: {type: ['string', 'null'], description: Ground handling agent.}
+        ghrAssistance: {type: ['object', 'null'], description: Ground handling services requested.}
+        ghrOperatorDetails: {type: ['object', 'null'], description: Ground handling operator name and country.}
+        ghrRecordInfo: {type: ['object', 'null'], description: Ground handling record status.}
+        linkedId: {type: ['string', 'null'], description: Id of a linked flight of this aircraft.}
+        hub: {$ref: '#/components/schemas/Hub'}

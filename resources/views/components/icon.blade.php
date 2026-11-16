@@ -45,7 +45,6 @@ $paths = [
     'tag' => '<path d="M3.5 12.5V4h8.5l8.5 8.5-8.5 8.5z"/><path d="M8 8h.5"/>',
     'duplicate' => '<rect x="8.5" y="3.5" width="12" height="12" rx="2"/><rect x="3.5" y="8.5" width="12" height="12" rx="2"/>',
     'gauge' => '<path d="M4 18a8 8 0 1116 0"/><path d="M12 18l4-6"/>',
-    'mark' => '<path d="M4 20L14 4h6L10 20z"/>',
 ];
 @endphp
 <svg {{ $attributes->merge(['class' => 'icon']) }} width="{{ $size }}" height="{{ $size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">{!! $paths[$name] ?? $paths['info'] !!}</svg>

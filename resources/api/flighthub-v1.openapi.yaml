@@ -1,5 +1,6 @@
 # RAC Flight Data Hub — Distribution API v1 (OpenAPI 3.1), maintained by hand.
-# Served at /api/openapi.yaml and shown at /api/docs (D-051). Change it with the API:
+# The complete INTERNAL document (D-054): not served; the public one is public-v1.openapi.yaml.
+# Change both with the API:
 # tests/Feature/ApiDocs check it against the routes, the field groups and real responses.
 # Flight field descriptions are the AODB's (resources/aodb/openapi-3.2.5.json).
 openapi: 3.1.0

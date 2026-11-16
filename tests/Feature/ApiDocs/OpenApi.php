@@ -10,28 +10,31 @@ use PHPUnit\Framework\Assert;
 use Symfony\Component\Yaml\Yaml;
 
 /**
- * The API's OpenAPI document, and validation against it with opis/json-schema
- * (OpenAPI 3.1 schemas are JSON Schema 2020-12). The whole document is
- * registered as one resource, so every $ref resolves inside it.
+ * The API's complete INTERNAL OpenAPI document (PublicOpenApi: the public one), and
+ * validation against it with opis/json-schema (OpenAPI 3.1 schemas are JSON Schema
+ * 2020-12). The whole document is registered as one resource, so every $ref resolves
+ * inside it.
  */
-final class OpenApi
+class OpenApi
 {
-    public const ID = 'https://flightdata.rac.co.rw/api/openapi.yaml';
+    public const FILE = ApiDocsController::INTERNAL_DOCUMENT;
 
-    private static ?object $document = null;
+    public const ID = 'https://flightdata.rac.co.rw/internal/flighthub-v1.openapi.yaml';
+
+    protected static ?object $document = null;
 
     /** @var array<string, mixed>|null */
-    private static ?array $tree = null;
+    protected static ?array $tree = null;
 
-    private static ?CompliantValidator $validator = null;
+    protected static ?CompliantValidator $validator = null;
 
     /**
      * The document with JSON-like types: maps as objects, lists as arrays.
      */
     public static function document(): object
     {
-        return self::$document ??= Yaml::parseFile(
-            base_path(ApiDocsController::DOCUMENT),
+        return static::$document ??= Yaml::parseFile(
+            base_path(static::FILE),
             Yaml::PARSE_OBJECT_FOR_MAP | Yaml::PARSE_EXCEPTION_ON_INVALID_TYPE,
         );
     }
@@ -43,17 +46,35 @@ final class OpenApi
      */
     public static function tree(): array
     {
-        return self::$tree ??= json_decode(json_encode(self::document(), JSON_THROW_ON_ERROR), true);
+        return static::$tree ??= json_decode(json_encode(static::document(), JSON_THROW_ON_ERROR), true);
     }
 
     public static function validator(): CompliantValidator
     {
-        if (self::$validator === null) {
-            self::$validator = new CompliantValidator(null, 20, false);
-            self::$validator->resolver()->registerRaw(self::document(), self::ID);
+        if (static::$validator === null) {
+            static::$validator = new CompliantValidator(null, 20, false);
+            static::$validator->resolver()->registerRaw(static::document(), static::ID);
         }
 
-        return self::$validator;
+        return static::$validator;
+    }
+
+    /**
+     * Errors of a whole document against the official OpenAPI 3.1 meta-schema
+     * (tests/Fixtures/openapi-3.1-schema.json; see OpenApiDocumentTest for its source and
+     * why "$dynamicRef": "#meta" is read as "#/$defs/schema").
+     *
+     * @return array<string, mixed>
+     */
+    public static function metaSchemaErrors(object $document): array
+    {
+        $id = 'https://spec.openapis.org/oas/3.1/schema/2022-10-07';
+        $raw = (string) file_get_contents(base_path('tests/Fixtures/openapi-3.1-schema.json'));
+        $validator = new CompliantValidator(null, 20, false);
+        $validator->resolver()->registerRaw(json_decode(str_replace('"$dynamicRef": "#meta"', '"$ref": "#/$defs/schema"', $raw), false, 512, JSON_THROW_ON_ERROR), $id);
+        $result = $validator->validate($document, $id);
+
+        return $result->isValid() ? [] : (new ErrorFormatter)->format($result->error(), true);
     }
 
     /**
@@ -72,7 +93,7 @@ final class OpenApi
     public static function resolve(string $pointer): array
     {
         for ($hops = 0; $hops < 10; $hops++) {
-            $node = self::tree();
+            $node = static::tree();
             foreach (array_slice(explode('/', $pointer), 1) as $part) {
                 $key = str_replace(['~1', '~0'], ['/', '~'], rawurldecode($part));
                 Assert::assertIsArray($node, "{$pointer}: not a container");
@@ -98,7 +119,7 @@ final class OpenApi
      */
     public static function errors(mixed $data, string $pointer): array
     {
-        $result = self::validator()->validate($data, self::ID.'#'.$pointer);
+        $result = static::validator()->validate($data, static::ID.'#'.$pointer);
         if ($result->isValid()) {
             return [];
         }
@@ -120,11 +141,11 @@ final class OpenApi
     public static function assertResponse(TestResponse $response, string $path, string $method = 'get'): void
     {
         $status = (string) $response->status();
-        $responses = self::tree()['paths'][$path][$method]['responses'] ?? null;
+        $responses = static::tree()['paths'][$path][$method]['responses'] ?? null;
         Assert::assertIsArray($responses, "{$method} {$path} is not in the document");
         Assert::assertArrayHasKey($status, $responses, "{$status} is not documented for {$method} {$path}");
 
-        self::assertAgainst($response, self::pointer('paths', $path, $method, 'responses', $status), "{$method} {$path} {$status}");
+        static::assertAgainst($response, self::pointer('paths', $path, $method, 'responses', $status), "{$method} {$path} {$status}");
     }
 
     /**
@@ -132,23 +153,23 @@ final class OpenApi
      */
     public static function assertAgainst(TestResponse $response, string $pointer, string $label): void
     {
-        [$object, $pointer] = self::resolve($pointer);
+        [$object, $pointer] = static::resolve($pointer);
 
         foreach (array_keys($object['headers'] ?? []) as $name) {
-            [$header, $headerPointer] = self::resolve($pointer.self::pointer('headers', $name));
+            [$header, $headerPointer] = static::resolve($pointer.self::pointer('headers', $name));
             $value = $response->headers->get($name);
             if ($header['required'] ?? false) {
                 Assert::assertNotNull($value, "{$label}: header {$name} missing");
             }
             if ($value !== null) {
                 $typed = ($header['schema']['type'] ?? null) === 'integer' && ctype_digit($value) ? (int) $value : $value;
-                Assert::assertSame([], self::errors($typed, $headerPointer.'/schema'), "{$label}: header {$name}");
+                Assert::assertSame([], static::errors($typed, $headerPointer.'/schema'), "{$label}: header {$name}");
             }
         }
 
         Assert::assertStringStartsWith('application/json', (string) $response->headers->get('Content-Type'), "{$label}: content type");
         Assert::assertArrayHasKey('application/json', $object['content'] ?? [], "{$label}: no JSON content documented");
         $body = json_decode((string) $response->getContent(), false, 512, JSON_THROW_ON_ERROR);
-        Assert::assertSame([], self::errors($body, $pointer.self::pointer('content', 'application/json', 'schema')), $label);
+        Assert::assertSame([], static::errors($body, $pointer.self::pointer('content', 'application/json', 'schema')), $label);
     }
 }

@@ -4,6 +4,7 @@ use App\Api\ApiException;
 use App\Api\ApiResponses;
 use App\Http\Middleware\EnsureAccountReady;
 use App\Http\Middleware\EnsureChallengeNotLocked;
+use App\Http\Middleware\RemovePoweredBy;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Middleware\ThrottleSignIn;
 use Illuminate\Foundation\Application;
@@ -22,6 +23,8 @@ return Application::configure(basePath: dirname(__DIR__))
         then: fn () => Route::group([], __DIR__.'/../routes/docs.php'),
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Every response (web, API, documentation): no X-Powered-By.
+        $middleware->append(RemovePoweredBy::class);
         $middleware->web(append: [SecurityHeaders::class]);
         $middleware->alias([
             'account' => EnsureAccountReady::class,

@@ -103,5 +103,7 @@ The whole hub runs on this Mac against its own local database. Use PHP 8.3
 
 7. Open http://127.0.0.1:8000/api/docs, click **Authorize**, paste the key, then
    **Try it out**. The page keeps the key in memory only; every call is logged in
-   `api_calls` like any other. The document itself is `/api/openapi.yaml`
-   (`resources/api/flighthub-v1.openapi.yaml`).
+   `api_calls` like any other. The document shown is the public one, `/api/openapi.yaml`
+   (`resources/api/public-v1.openapi.yaml`, with `APP_URL` + `/api/v1` as its server, so
+   `APP_URL` must be the address you open, e.g. `http://127.0.0.1:8000`). The complete internal
+   document, `resources/api/flighthub-v1.openapi.yaml`, is not served.

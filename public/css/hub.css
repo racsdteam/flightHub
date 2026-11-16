@@ -111,7 +111,10 @@ code, .mono { font-family: var(--font-mono); font-size: var(--text-mono); line-h
 }
 .brand { display: inline-flex; align-items: center; gap: 12px; color: var(--color-text-on-navy); font-size: var(--text-h3); line-height: var(--lh-h3); font-weight: 700; text-decoration: none; white-space: nowrap; }
 .brand:hover { text-decoration: none; }
-.brand-mark { display: inline-flex; color: var(--color-focus); }
+/* RAC logo (D-053) on a white tile: its blue and grey would be lost on the navy bar. */
+.brand-tile { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 2px; background: #FFFFFF; border-radius: var(--radius-md); flex: none; }
+.brand-tile img { display: block; width: 40px; height: 40px; }
+.auth-logo { display: block; width: 120px; height: 120px; margin: 0 auto var(--space-3); }
 .top-search { position: relative; flex: 1; max-width: 480px; margin-left: auto; }
 .top-search .icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--color-text-on-navy-muted); }
 .top-search input {

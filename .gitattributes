@@ -15,3 +15,6 @@ CHANGELOG.md export-ignore
 
 # Swagger UI (swagger-ui-dist) is kept byte-for-byte as downloaded.
 /public/vendor/swagger-ui/* -text
+
+# The RAC logo (supplied by RAC, D-053) and the files derived from it, byte-for-byte.
+/public/images/* -text

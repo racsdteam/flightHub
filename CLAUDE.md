@@ -157,11 +157,19 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   ids, reference rows their natural keys.
 - Every call is logged in api_calls (append-only, 1 year, D-036), never the key or the
   Authorization header.
-- Documentation (D-051): resources/api/flighthub-v1.openapi.yaml (OpenAPI 3.1, hand-written)
-  is served at /api/openapi.yaml and shown by Swagger UI (public/vendor/swagger-ui, served by
-  the hub) at /api/docs: public, read-only, no session (routes/docs.php, outside the web
-  group). Every API change updates the document; tests/Feature/ApiDocs check it against the
-  routes, the field groups and real responses.
+- Documentation (D-051, D-054): two hand-written OpenAPI 3.1 documents.
+  resources/api/public-v1.openapi.yaml is for outsiders and the only one served: at
+  /api/openapi.yaml (with one server added, config app.url + /api/v1) and by Swagger UI
+  (public/vendor/swagger-ui) at /api/docs; public, read-only, no session (routes/docs.php,
+  outside the web group). It documents only GET /flights and GET /flights/{id}: a three-line
+  introduction, one short line per field, no quality or correction information, no as_of or
+  include_removed, no internal words (AODB, decision ids, group names, table or class names).
+  resources/api/flighthub-v1.openapi.yaml is the complete INTERNAL document: not served, kept
+  for the contract tests and RAC IT. Every API change updates both; tests/Feature/ApiDocs
+  check them against the routes, the field groups, the OpenAPI 3.1 meta-schema and real
+  responses.
+- No response carries X-Powered-By (RemovePoweredBy, global middleware); production also sets
+  expose_php = Off.
 
 ## Admin screens
 - Fortify (sign-in only; its routes are registered in routes/web.php) + Livewire, Blade, one
@@ -218,7 +226,10 @@ the design mockups of 2026-11-16 (D-052; docs/screens/design/, docs/DESIGN-ui.md
   server-rendered SVG (sizes as attributes) or <meter>/<progress>. tests/Feature/Admin/ViewsCspTest
   checks every view.
 - Text uses the system UI font; codes, times and ids IBM Plex Mono (public/fonts, OFL).
-- No logos: airline codes as badges; the product mark is the text "RAC Flight Data Hub".
+- RAC's official logo (D-053; public/images/rac-logo.png, kept byte-for-byte, derived sizes made
+  with sips) on a white tile in every top bar, followed by "Flight Data Hub"; the larger logo
+  above the card on sign-in and error pages; favicon and apple-touch icon in every page head.
+  No airline logos: airline codes as badges.
 - WCAG AA for every text/background pair; status never by colour alone (icon + word); visible
   2 px focus ring; prefers-reduced-motion respected.
 - Desktop first (1366–1920 px, usable at 1280 px). Real data only, never mockup text or numbers.
