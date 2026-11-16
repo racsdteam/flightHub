@@ -1,0 +1,1865 @@
+# RAC Flight Data Hub — Distribution API v1 (OpenAPI 3.1), maintained by hand.
+# Served at /api/openapi.yaml and shown at /api/docs (D-051). Change it with the API:
+# tests/Feature/ApiDocs check it against the routes, the field groups and real responses.
+# Flight field descriptions are the AODB's (resources/aodb/openapi-3.2.5.json).
+openapi: 3.1.0
+info:
+  title: RAC Flight Data Hub API
+  version: 1.0.0
+  summary: Kigali International Airport flight data, cleaned and versioned, for RAC systems.
+  description: |
+    The RAC Flight Data Hub collects the flight data of Kigali International Airport (HRYR)
+    from the airport's AODB, cleans it, keeps every change and serves it to other RAC systems
+    through this read-only API. Run by RAC IT.
+
+    ## Keys and the Authorization header
+
+    Every consumer system has its own key, issued by RAC IT. A key looks like
+    `fdh_xxxxxxxx_…`; it is shown once when it is issued and the hub keeps only a hash of it.
+
+    Send the key in the `Authorization` header of every call:
+
+        Authorization: Bearer fdh_xxxxxxxx_…
+
+    Never put the key in the URL: a key in the query string is ignored (and URLs end up in
+    logs and browser histories). A missing, malformed, unknown, revoked or expired key, or a
+    disabled consumer, always gets the same answer: `401 {"error": "UNAUTHORIZED"}`.
+
+    On this page, **Authorize** takes a key for **Try it out**. The page keeps it in memory
+    only (not in the browser's storage): it is gone when the page is reloaded. Calls made with
+    Try it out are real API calls and are logged like any other.
+
+    ## Field groups
+
+    A consumer receives only the field groups RAC IT gave it. `identity` is always given. A
+    field that is in none of the consumer's groups is never served: it is absent from the
+    flight, absent from a flight's history, and its events are left out of `/changes`. A
+    field in no group at all is never served to anyone, including fields the AODB adds later.
+    Inside the consumer's groups, every top-level field is present; it is `null` when the AODB
+    does not send it.
+
+    Each field of the Flight schema below names its group in `x-field-group`. The groups:
+    identity, route, schedule, times, acdm, resources, aircraft, passengers, delays,
+    ground_handling, rotation, quality.
+
+    Field descriptions come from the AODB's own documentation (Innov'ATM Airport Keeper
+    External API 3.2.5). Values are served as the AODB sends them, except the corrected
+    values listed in `hub.corrections`; formats the AODB documents but does not respect are
+    reported in `hub.quality`, not changed.
+
+    ## Times and days
+
+    Every time is UTC, written `YYYY-MM-DDTHH:MM:SSZ`.
+
+    - `day=YYYY-MM-DD` is a Kigali calendar day (Africa/Kigali, UTC+2): `day=2026-10-29` is
+      2026-10-28T22:00:00Z up to 2026-10-29T22:00:00Z.
+    - `from` and `to` give any other window: ISO-8601 date-times with a zone (`Z` or
+      `+02:00`), half-open `[from, to)`, at most 7 days. KIA PULSE's operational day
+      (07:00 → 07:00 Kigali) is `from=2026-10-29T05:00:00Z&to=2026-10-30T05:00:00Z`.
+    - A flight is in a window when its reference time is: the scheduled time, else the
+      estimated time, else the actual time (arrivals: sibt, eibt, eldt, aibt, aldt;
+      departures: sobt, eobt, tobt, etot, aobt, atot). It is given in `hub.referenceTime`.
+
+    ## Freshness: meta.asOf and "stale"
+
+    `meta.asOf` is when the hub's last successful AODB poll finished. `meta.feed` is `stale`
+    when that is more than 15 minutes ago (or when there has been none yet): the data may then
+    be out of date. Otherwise it is `ok`. The hub polls the AODB every 5 minutes, so the time
+    of a change is known to about 5 minutes.
+
+    ## as_of: what the hub knew at a moment
+
+    `as_of` on `/flights` gives the flights as the hub knew them at that moment, from the
+    versions it kept, with the quality flags that were open then. It is what the hub knew,
+    not what was true: a correction the AODB sent later does not appear in an answer for an
+    earlier moment. `meta.requestedAsOf` repeats the moment asked for.
+
+    ## Changes since: paging with the cursor
+
+    `/changes` returns every change the hub recorded, in order, each with its `cursor`.
+    Start with `cursor=0`, then call again with `cursor=` the `meta.nextCursor` of the last
+    answer, and keep it once the events are processed. While `meta.hasMore` is true there is
+    more to read.
+
+    `meta.nextCursor` is the last event the hub **scanned**, not the last one it returned.
+    Events on fields outside the consumer's groups are skipped, so a page can hold fewer
+    events than `limit`, or none at all, while `nextCursor` still moves on. That is normal:
+    events a consumer may not see never block it.
+
+    Kinds of event:
+
+    - `first_seen`: the hub saw the flight for the first time; `new` is the whole flight in
+      the same shape as in `/flights` (its `hub.quality` is empty: flags are evaluated after
+      that poll).
+    - `field_changed`: one field changed. `field` is its AODB path (`eobt`,
+      `paxDetails.pmr`, …) or a hub field (`hub.sameAs`, `hub.rotationNext`,
+      `hub.rotationPrev`); `old` and `new` are its values. A list is compared as one value.
+      A field the AODB stops sending changes to `null`.
+    - `removed_from_feed` and `returned_to_feed`: see below.
+
+    ## Duplicates and removed flights
+
+    A flight's identity is its AODB `id`. The hub never merges flights by itself: it flags
+    suspected duplicates and a person decides. A flight marked "same as" another gets
+    `hub.sameAs` = the AODB id of the flight that is kept. It is then left out of `/flights`
+    lists, but it stays reachable at `/flights/{aodbId}` and in `/changes` (field
+    `hub.sameAs`).
+
+    A flight that leaves the AODB feed is never deleted: it gets a `removed_from_feed` event
+    and `hub.inFeed` becomes false. `/flights` leaves it out unless `include_removed=1`. If it
+    comes back, it gets a `returned_to_feed` event.
+
+    ## Where a value comes from: source
+
+    Each event has a `source`:
+
+    - `aodb`: the value the AODB sent.
+    - `correction`: a served value corrected from a reviewed reference table (for example
+      airport code NB0 → NBO). The AODB value is kept and shown in `hub.corrections`.
+    - `manual`: a person's decision in the hub, for example "same as".
+    - `system`: the hub's own conclusion, for example a flight removed from or returned to the
+      feed, or a rotation linked by registration.
+    - `backfill`: an event written when a past period is loaded afterwards (reserved; not
+      used yet).
+
+    ## Rate limits
+
+    Each consumer has a number of calls per minute per key (set by RAC IT). Beyond it the hub
+    answers `429 RATE_LIMITED` with a `Retry-After` header in seconds. Refused calls (401)
+    count per IP address: after 30 in a minute, calls without a valid key from that address
+    get 429 for the rest of the minute. A valid key is never blocked by that limit.
+
+    ## Errors
+
+    Every error is JSON `{"error": CODE, "message": text}`, never a stack trace:
+    `UNAUTHORIZED` (401), `NOT_FOUND` (404: an unknown flight or path), `METHOD_NOT_ALLOWED`
+    (405: any method other than GET or HEAD, with an `Allow` header), `INVALID_PARAMETER`
+    (422), `RATE_LIMITED` (429), `SERVER_ERROR` (500).
+
+    Every call is logged (consumer, path, parameters, status, time), never the key.
+servers:
+  - url: https://flightdata.rac.co.rw/api/v1
+    description: Production
+  - url: http://127.0.0.1:8000/api/v1
+    description: Local testing (php artisan serve)
+security:
+  - apiKey: []
+tags:
+  - name: Flights
+  - name: Changes
+  - name: Health
+paths:
+  /flights:
+    get:
+      tags: [Flights]
+      operationId: listFlights
+      summary: Flights of a Kigali day or of a time window
+      description: |
+        The flights whose reference time is in the window, sorted by reference time. Give
+        either `day`, or `from` and `to`. Flights marked "same as" another are left out;
+        flights removed from the feed are left out unless `include_removed=1`.
+      parameters:
+        - $ref: '#/components/parameters/day'
+        - $ref: '#/components/parameters/from'
+        - $ref: '#/components/parameters/to'
+        - $ref: '#/components/parameters/as_of'
+        - $ref: '#/components/parameters/flow'
+        - $ref: '#/components/parameters/include_removed'
+      responses:
+        '200':
+          description: The flights, with only the consumer's field groups.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FlightList'
+              examples:
+                identityOnly:
+                  summary: identity group only, day=2026-10-29 (first 2 of 41 flights)
+                  value:
+                    data:
+                      - id: c5ef6537-9818-4c4e-bb22-f75b3733ba4b
+                        flow: ARR
+                        flightNumber: '835'
+                        fullFlightNumber: MS835
+                        airlineIata: MS
+                        airlineIcao: MSR
+                        status: SCHEDULED
+                        milestone: null
+                        callsign: null
+                        hub:
+                          referenceTime: '2026-10-29T00:40:00Z'
+                          inFeed: true
+                          sameAs: null
+                      - id: d9d80049-0478-4abe-bf7a-8fcd3608b802
+                        flow: DEP
+                        flightNumber: 464A
+                        fullFlightNumber: WB464A
+                        airlineIata: WB
+                        airlineIcao: RWD
+                        status: IN_FLIGHT
+                        milestone: null
+                        callsign: null
+                        hub:
+                          referenceTime: '2026-10-29T00:45:00Z'
+                          inFeed: true
+                          sameAs: null
+                    meta:
+                      asOf: '2026-10-29T07:42:30Z'
+                      feed: ok
+                      window:
+                        from: '2026-10-28T22:00:00Z'
+                        to: '2026-10-29T22:00:00Z'
+                      requestedAsOf: null
+                routeAndQuality:
+                  summary: route and quality groups, day=2026-10-29 (KQ470 only)
+                  value:
+                    data:
+                      - id: 0af6b9d4-e030-40cd-aea5-108df1e6bae6
+                        flow: ARR
+                        flightNumber: '470'
+                        fullFlightNumber: KQ470
+                        airlineIata: KQ
+                        airlineIcao: KQA
+                        status: SCHEDULED
+                        milestone: null
+                        callsign: null
+                        adepIata: NBO
+                        adepIcao: HKJK
+                        adesIata: KGL
+                        adesIcao: HRYR
+                        adepDetails: null
+                        adesDetails: null
+                        divertedDetails: null
+                        codeShare: null
+                        routeIcao: null
+                        hub:
+                          referenceTime: '2026-10-29T06:00:00Z'
+                          inFeed: true
+                          sameAs: null
+                          quality:
+                            - rule: format_invalid
+                              field: adepIata
+                              since: '2026-10-29T07:42:30Z'
+                            - rule: required_missing
+                              field: adepIcao
+                              since: '2026-10-29T07:42:30Z'
+                            - rule: no_actual_after_schedule
+                              field: null
+                              since: '2026-10-29T07:42:30Z'
+                          corrections:
+                            - field: adepIata
+                              aodb: NB0
+                              served: NBO
+                              reference: 'airport_code_corrections:NB0'
+                            - field: adepIcao
+                              aodb: null
+                              served: HKJK
+                              reference: 'airport_code_corrections:NB0'
+                    meta:
+                      asOf: '2026-10-29T07:42:30Z'
+                      feed: ok
+                      window:
+                        from: '2026-10-28T22:00:00Z'
+                        to: '2026-10-29T22:00:00Z'
+                      requestedAsOf: null
+                allGroups:
+                  summary: every group, day=2026-10-29 (KQ470 only)
+                  value:
+                    data:
+                      - id: 0af6b9d4-e030-40cd-aea5-108df1e6bae6
+                        flow: ARR
+                        flightNumber: '470'
+                        fullFlightNumber: KQ470
+                        airlineIata: KQ
+                        airlineIcao: KQA
+                        status: SCHEDULED
+                        milestone: null
+                        callsign: null
+                        adepIata: NBO
+                        adepIcao: HKJK
+                        adesIata: KGL
+                        adesIcao: HRYR
+                        adepDetails: null
+                        adesDetails: null
+                        divertedDetails: null
+                        codeShare: null
+                        routeIcao: null
+                        sobt: null
+                        sibt: '2026-10-29T06:00:00Z'
+                        eobt: null
+                        etot: null
+                        aobt: null
+                        atot: null
+                        eldt: '2026-10-29T05:56:00Z'
+                        aldt: null
+                        eibt: null
+                        aibt: null
+                        tobt: null
+                        tsat: null
+                        ttot: null
+                        ctot: null
+                        pobt: null
+                        ardt: null
+                        asat: null
+                        asrt: null
+                        efat: null
+                        afat: null
+                        efet: null
+                        afet: null
+                        eet: null
+                        vtt: null
+                        regulation: null
+                        pkg: null
+                        gate: null
+                        gateDetails: null
+                        terminal: null
+                        hall: null
+                        counter: null
+                        carousel: null
+                        rwy: null
+                        sid: null
+                        bridge: null
+                        bus: null
+                        deicing: null
+                        zoneDetails: null
+                        checkInDetails: null
+                        boardingDetails: null
+                        baggageCheckInDetails: null
+                        baggageDeliveryDetails: null
+                        borderControl: null
+                        securityCheckpoint: null
+                        publicDisplayed: null
+                        reg: null
+                        acTypeIata: E90
+                        acTypeIcao: E190
+                        aircraftDetails:
+                          acTypeName: 'Embraer ERJ 190'
+                          mtow: null
+                          wtc: M
+                        paxCapa: 96
+                        mtt: null
+                        paxNb: null
+                        paxDetails: null
+                        bags: null
+                        nationality: null
+                        trafficNature: null
+                        dlCodes: null
+                        remarks: null
+                        groundHandler: null
+                        ghrAssistance: null
+                        ghrOperatorDetails: null
+                        ghrRecordInfo: null
+                        linkedId: null
+                        hub:
+                          referenceTime: '2026-10-29T06:00:00Z'
+                          inFeed: true
+                          sameAs: null
+                          minTurnaroundMinutes: null
+                          rotationNext: null
+                          rotationPrev: null
+                          rotationSource: null
+                          quality:
+                            - rule: format_invalid
+                              field: adepIata
+                              since: '2026-10-29T07:42:30Z'
+                            - rule: required_missing
+                              field: adepIcao
+                              since: '2026-10-29T07:42:30Z'
+                            - rule: no_actual_after_schedule
+                              field: null
+                              since: '2026-10-29T07:42:30Z'
+                          corrections:
+                            - field: adepIata
+                              aodb: NB0
+                              served: NBO
+                              reference: 'airport_code_corrections:NB0'
+                            - field: adepIcao
+                              aodb: null
+                              served: HKJK
+                              reference: 'airport_code_corrections:NB0'
+                    meta:
+                      asOf: '2026-10-29T07:42:30Z'
+                      feed: ok
+                      window:
+                        from: '2026-10-28T22:00:00Z'
+                        to: '2026-10-29T22:00:00Z'
+                      requestedAsOf: null
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '422':
+          description: A parameter is missing or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                badDay:
+                  summary: day=29-10-2026
+                  value: {error: INVALID_PARAMETER, message: Expected a date as YYYY-MM-DD.}
+                tooLong:
+                  summary: from=2026-10-20T00:00:00Z&to=2026-10-29T00:00:00Z
+                  value: {error: INVALID_PARAMETER, message: Window is longer than 7 days.}
+                neither:
+                  summary: neither day nor from and to (or both)
+                  value: {error: INVALID_PARAMETER, message: Give either day=YYYY-MM-DD or from and to.}
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /flights/{aodbId}:
+    get:
+      tags: [Flights]
+      operationId: getFlight
+      summary: One flight, by its AODB id
+      description: |
+        The flight now, even when it is hidden from lists (same as another flight, or removed
+        from the feed). With `history=1`, also every change event of the flight the consumer
+        may see, in order.
+      parameters:
+        - $ref: '#/components/parameters/aodbId'
+        - $ref: '#/components/parameters/history'
+      responses:
+        '200':
+          description: The flight (and its history), with only the consumer's field groups.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FlightOne'
+              examples:
+                withHistory:
+                  summary: KQ470, route and quality groups, history=1
+                  value:
+                    data:
+                      id: 0af6b9d4-e030-40cd-aea5-108df1e6bae6
+                      flow: ARR
+                      flightNumber: '470'
+                      fullFlightNumber: KQ470
+                      airlineIata: KQ
+                      airlineIcao: KQA
+                      status: SCHEDULED
+                      milestone: null
+                      callsign: null
+                      adepIata: NBO
+                      adepIcao: HKJK
+                      adesIata: KGL
+                      adesIcao: HRYR
+                      adepDetails: null
+                      adesDetails: null
+                      divertedDetails: null
+                      codeShare: null
+                      routeIcao: null
+                      hub:
+                        referenceTime: '2026-10-29T06:00:00Z'
+                        inFeed: true
+                        sameAs: null
+                        quality:
+                          - rule: format_invalid
+                            field: adepIata
+                            since: '2026-10-29T07:42:30Z'
+                          - rule: required_missing
+                            field: adepIcao
+                            since: '2026-10-29T07:42:30Z'
+                          - rule: no_actual_after_schedule
+                            field: null
+                            since: '2026-10-29T07:42:30Z'
+                        corrections:
+                          - field: adepIata
+                            aodb: NB0
+                            served: NBO
+                            reference: 'airport_code_corrections:NB0'
+                          - field: adepIcao
+                            aodb: null
+                            served: HKJK
+                            reference: 'airport_code_corrections:NB0'
+                    history:
+                      - cursor: 28
+                        aodbId: 0af6b9d4-e030-40cd-aea5-108df1e6bae6
+                        observedAt: '2026-10-29T07:42:30Z'
+                        kind: first_seen
+                        field: null
+                        old: null
+                        new:
+                          id: 0af6b9d4-e030-40cd-aea5-108df1e6bae6
+                          flow: ARR
+                          flightNumber: '470'
+                          fullFlightNumber: KQ470
+                          airlineIata: KQ
+                          airlineIcao: KQA
+                          status: SCHEDULED
+                          milestone: null
+                          callsign: null
+                          adepIata: NBO
+                          adepIcao: HKJK
+                          adesIata: KGL
+                          adesIcao: HRYR
+                          adepDetails: null
+                          adesDetails: null
+                          divertedDetails: null
+                          codeShare: null
+                          routeIcao: null
+                          hub:
+                            referenceTime: '2026-10-29T06:00:00Z'
+                            inFeed: true
+                            sameAs: null
+                            quality: {  }
+                            corrections:
+                              - field: adepIata
+                                aodb: NB0
+                                served: NBO
+                                reference: 'airport_code_corrections:NB0'
+                              - field: adepIcao
+                                aodb: null
+                                served: HKJK
+                                reference: 'airport_code_corrections:NB0'
+                        source: aodb
+                      - cursor: 29
+                        aodbId: 0af6b9d4-e030-40cd-aea5-108df1e6bae6
+                        observedAt: '2026-10-29T07:42:30Z'
+                        kind: field_changed
+                        field: adepIata
+                        old: NB0
+                        new: NBO
+                        source: correction
+                      - cursor: 30
+                        aodbId: 0af6b9d4-e030-40cd-aea5-108df1e6bae6
+                        observedAt: '2026-10-29T07:42:30Z'
+                        kind: field_changed
+                        field: adepIcao
+                        old: null
+                        new: HKJK
+                        source: correction
+                    meta:
+                      asOf: '2026-10-29T07:42:30Z'
+                      feed: ok
+                identityOnly:
+                  summary: KQ470, identity group only
+                  value:
+                    data:
+                      id: 0af6b9d4-e030-40cd-aea5-108df1e6bae6
+                      flow: ARR
+                      flightNumber: '470'
+                      fullFlightNumber: KQ470
+                      airlineIata: KQ
+                      airlineIcao: KQA
+                      status: SCHEDULED
+                      milestone: null
+                      callsign: null
+                      hub:
+                        referenceTime: '2026-10-29T06:00:00Z'
+                        inFeed: true
+                        sameAs: null
+                    meta:
+                      asOf: '2026-10-29T07:42:30Z'
+                      feed: ok
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No flight has this AODB id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                unknownFlight:
+                  value: {error: NOT_FOUND, message: Flight not found.}
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '422':
+          description: A parameter is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                badHistory:
+                  summary: history=yes
+                  value: {error: INVALID_PARAMETER, message: history must be 1 or 0.}
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /changes:
+    get:
+      tags: [Changes]
+      operationId: listChanges
+      summary: Changes since a cursor
+      description: |
+        Change events with a cursor greater than `cursor`, in order, at most `limit` scanned
+        per call. Events on fields outside the consumer's groups are left out, and
+        `meta.nextCursor` still moves past them (see "Changes since" above).
+      parameters:
+        - $ref: '#/components/parameters/cursor'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: The events the consumer may see, and where to continue.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangeList'
+              examples:
+                identityOnly:
+                  summary: identity group only, cursor=0&limit=5 (event 4, hub.rotationNext, is skipped)
+                  value:
+                    data:
+                      - cursor: 1
+                        aodbId: d9d80049-0478-4abe-bf7a-8fcd3608b802
+                        observedAt: '2026-10-29T07:42:30Z'
+                        kind: first_seen
+                        field: null
+                        old: null
+                        new:
+                          id: d9d80049-0478-4abe-bf7a-8fcd3608b802
+                          flow: DEP
+                          flightNumber: 464A
+                          fullFlightNumber: WB464A
+                          airlineIata: WB
+                          airlineIcao: RWD
+                          status: IN_FLIGHT
+                          milestone: null
+                          callsign: null
+                          hub:
+                            referenceTime: '2026-10-29T00:45:00Z'
+                            inFeed: true
+                            sameAs: null
+                        source: aodb
+                      - cursor: 2
+                        aodbId: 8e1f3bb3-2b8b-4458-8eac-7052e87a7091
+                        observedAt: '2026-10-29T07:42:30Z'
+                        kind: first_seen
+                        field: null
+                        old: null
+                        new:
+                          id: 8e1f3bb3-2b8b-4458-8eac-7052e87a7091
+                          flow: DEP
+                          flightNumber: '835'
+                          fullFlightNumber: MS835
+                          airlineIata: MS
+                          airlineIcao: MSR
+                          status: SCHEDULED
+                          milestone: null
+                          callsign: null
+                          hub:
+                            referenceTime: '2026-10-29T01:20:00Z'
+                            inFeed: true
+                            sameAs: null
+                        source: aodb
+                      - cursor: 3
+                        aodbId: 2e1cd799-26d8-4d29-80f2-ec6706b04649
+                        observedAt: '2026-10-29T07:42:30Z'
+                        kind: first_seen
+                        field: null
+                        old: null
+                        new:
+                          id: 2e1cd799-26d8-4d29-80f2-ec6706b04649
+                          flow: ARR
+                          flightNumber: 478D
+                          fullFlightNumber: KQ478D
+                          airlineIata: KQ
+                          airlineIcao: KQA
+                          status: TERMINATED
+                          milestone: null
+                          callsign: null
+                          hub:
+                            referenceTime: '2026-10-29T05:09:00Z'
+                            inFeed: true
+                            sameAs: null
+                        source: aodb
+                      - cursor: 5
+                        aodbId: dac72e43-b4cb-4d09-9aa5-e0398fa5a6b8
+                        observedAt: '2026-10-29T07:42:30Z'
+                        kind: first_seen
+                        field: null
+                        old: null
+                        new:
+                          id: dac72e43-b4cb-4d09-9aa5-e0398fa5a6b8
+                          flow: ARR
+                          flightNumber: '464'
+                          fullFlightNumber: WB464
+                          airlineIata: WB
+                          airlineIcao: RWD
+                          status: TERMINATED
+                          milestone: null
+                          callsign: null
+                          hub:
+                            referenceTime: '2026-10-29T04:10:00Z'
+                            inFeed: true
+                            sameAs: null
+                        source: aodb
+                    meta:
+                      asOf: '2026-10-29T07:42:30Z'
+                      feed: ok
+                      cursor: 0
+                      limit: 5
+                      nextCursor: 5
+                      hasMore: true
+                      headCursor: 59
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '422':
+          description: A parameter is missing or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                noCursor:
+                  summary: cursor missing
+                  value: {error: INVALID_PARAMETER, message: 'cursor is required: 0 or a previous nextCursor.'}
+                badLimit:
+                  summary: limit=0
+                  value: {error: INVALID_PARAMETER, message: limit must be a positive integer.}
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Freshness of the feed
+      description: When the last successful AODB poll finished, whether the feed is stale, and the outcome of the last poll.
+      responses:
+        '200':
+          description: The feed's freshness.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthOne'
+              examples:
+                ok:
+                  summary: right after the 29 Oct 2026 07:42:30Z poll
+                  value:
+                    data:
+                      asOf: '2026-10-29T07:42:30Z'
+                      feed: ok
+                      lastPoll:
+                        outcome: ok
+                        finishedAt: '2026-10-29T07:42:30Z'
+                    meta:
+                      asOf: '2026-10-29T07:42:30Z'
+                      feed: ok
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: fdh_…
+      description: 'The consumer''s API key, in the Authorization header only: `Authorization: Bearer fdh_…`.'
+  parameters:
+    day:
+      name: day
+      in: query
+      description: 'A Kigali calendar day (Africa/Kigali, UTC+2), YYYY-MM-DD, e.g. 2026-10-29. Not with from and to.'
+      schema: {type: string, format: date, pattern: '^\d{4}-\d{2}-\d{2}$'}
+    from:
+      name: from
+      in: query
+      description: 'Start of the window (included): ISO-8601 date-time with a zone, e.g. 2026-10-29T05:00:00Z. With to; not with day. The window is at most 7 days.'
+      schema: {type: string, format: date-time}
+    to:
+      name: to
+      in: query
+      description: 'End of the window (excluded): ISO-8601 date-time with a zone after from, e.g. 2026-10-30T05:00:00Z. With from; not with day.'
+      schema: {type: string, format: date-time}
+    as_of:
+      name: as_of
+      in: query
+      description: 'The flights as the hub knew them at this moment (ISO-8601 date-time with a zone). Omitted: now.'
+      schema: {type: string, format: date-time}
+    flow:
+      name: flow
+      in: query
+      description: 'Only arrivals (ARR) or only departures (DEP). Omitted: both.'
+      schema: {type: string, enum: [ARR, DEP]}
+    include_removed:
+      name: include_removed
+      in: query
+      description: '1 (or true): also the flights removed from the feed (hub.inFeed false). Default 0.'
+      schema: {type: string, enum: ['0', '1', 'false', 'true'], default: '0'}
+    history:
+      name: history
+      in: query
+      description: '1 (or true): also the flight''s change events the consumer may see, in order. Default 0.'
+      schema: {type: string, enum: ['0', '1', 'false', 'true'], default: '0'}
+    cursor:
+      name: cursor
+      in: query
+      required: true
+      description: 0 for the first call, then the meta.nextCursor of the previous answer.
+      schema: {type: integer, minimum: 0}
+      example: 0
+    limit:
+      name: limit
+      in: query
+      description: 'Events scanned per call: default 500, at most 1000 (a larger value is treated as 1000).'
+      schema: {type: integer, minimum: 1, maximum: 1000, default: 500}
+    aodbId:
+      name: aodbId
+      in: path
+      required: true
+      description: 'The flight''s AODB id (up to 64 characters: letters, digits, ".", "_", ":", "-").'
+      schema: {type: string, pattern: '^[A-Za-z0-9._:-]{1,64}$'}
+      example: 0af6b9d4-e030-40cd-aea5-108df1e6bae6
+  headers:
+    Retry-After:
+      description: Seconds to wait before calling again.
+      required: true
+      schema: {type: integer, minimum: 1}
+    Allow:
+      description: The methods the API accepts.
+      required: true
+      schema: {type: string, const: 'GET, HEAD'}
+  responses:
+    Unauthorized:
+      description: 'No valid key: missing, malformed, unknown, revoked or expired, or the consumer is disabled. Always the same answer.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            unauthorized:
+              value: {error: UNAUTHORIZED, message: A valid API key is required.}
+    NotFound:
+      description: Unknown path under /api/v1.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            notFound:
+              value: {error: NOT_FOUND, message: Not found.}
+    MethodNotAllowed:
+      description: Any method other than GET or HEAD, on any /api/v1 path. The call is logged like any other.
+      headers:
+        Allow:
+          $ref: '#/components/headers/Allow'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            post:
+              summary: POST /flights
+              value: {error: METHOD_NOT_ALLOWED, message: Method not allowed.}
+    RateLimited:
+      description: Too many calls in this minute (the key's limit, or 30 refused calls from this IP address).
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/Retry-After'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            rateLimited:
+              value: {error: RATE_LIMITED, message: Too many requests.}
+  schemas:
+    Flight:
+      type: object
+      description: |
+        A flight as the consumer may see it: the top-level fields of its groups (each present,
+        null when the AODB does not send it; objects as the AODB sends them), corrected values
+        under their AODB names, and the `hub` object. No other field is ever served.
+      required: [id, flow, flightNumber, fullFlightNumber, airlineIata, airlineIcao, status, milestone, callsign, hub]
+      additionalProperties: false
+      properties:
+        id:
+          description: "Internal flight unique identifier (the AODB id: the flight's identity in the hub)"
+          type: string
+          x-field-group: identity
+        flow:
+          description: |-
+            The flight flow at the airport:
+            - ARR - arrival flight
+            - DEP - departure flight
+          type: string
+          enum: [ARR, DEP]
+          x-field-group: identity
+        flightNumber:
+          description: 'The flight number (only number part, excluding airline IATA code)'
+          type: [string, 'null']
+          x-field-group: identity
+        fullFlightNumber:
+          description: 'The full flight number including airline IATA code'
+          type: [string, 'null']
+          x-field-group: identity
+        airlineIata:
+          description: 'The flight airline IATA code (2-letters or letter+digit)'
+          type: [string, 'null']
+          x-field-group: identity
+        airlineIcao:
+          description: 'The flight airline ICAO code (3-letters)'
+          type: [string, 'null']
+          x-field-group: identity
+        status:
+          description: |-
+            The flight global status:
+            - SCHEDULED - flight is scheduled but not yet airborne
+            - IN_FLIGHT - flight is airborne
+            - SUSPENDED - flight is suspended by the network manager
+            - TERMINATED - flight has terminated
+            - CANCELLED - flight is cancelled
+            - NONE - undefined
+          type: [string, 'null']
+          x-field-group: identity
+        milestone:
+          description: |-
+            The flight milestone:
+            - SCHEDULED - for ARR flight: flight is scheduled but not yet airborne; for DEP flight: preceding arrival flight is scheduled but not yet airborne
+            - AIRBORNE - for ARR flight only: flight is airborne
+            - FIR_ENTRY - for ARR flight only: flight entered FIR
+            - FINAL - for ARR flight only: flight is in final approach
+            - LANDED - for ARR flight only: flight has landed
+            - IN_BLOCK - for ARR flight only: flight is at the block
+            - NO_IN_BLOCK - for DEP flight only: preceding arrival flight is airborne or landed but not yet at the block
+            - ON_BLOCK - for DEP flight only: preceding arrival flight is at the block but the departure operations have not yet started
+            - START_BOARDING - for DEP flight only: boarding started
+            - AC_READY - for DEP flight only: the aircraft is ready for departure
+            - OK_START - for DEP flight only: the aircraft was given clearance to depart
+            - OFF_BLOCK - for DEP flight only: the flight has left the block
+            - TAKE_OFF - for DEP flight only: the flight has taken off
+          type: [string, 'null']
+          x-field-group: identity
+        callsign:
+          description: 'The flight ATC callsign'
+          type: [string, 'null']
+          x-field-group: identity
+        adepIata:
+          description: |-
+            The flight departure airport IATA code (3-letters)
+            Served value: may be corrected from a reviewed reference table; the AODB value is then in hub.corrections.
+          type: [string, 'null']
+          x-field-group: route
+        adepIcao:
+          description: |-
+            The flight departure airport ICAO code (4-letters)
+            Served value: may be corrected from a reviewed reference table; the AODB value is then in hub.corrections.
+          type: [string, 'null']
+          x-field-group: route
+        adesIata:
+          description: |-
+            The flight destination airport IATA code (3-letters)
+            Served value: may be corrected from a reviewed reference table; the AODB value is then in hub.corrections.
+          type: [string, 'null']
+          x-field-group: route
+        adesIcao:
+          description: |-
+            The flight destination airport ICAO code (4-letters)
+            Served value: may be corrected from a reviewed reference table; the AODB value is then in hub.corrections.
+          type: [string, 'null']
+          x-field-group: route
+        adepDetails:
+          description: 'The additional details on departure airport (for ARR flight only)'
+          anyOf: [{ $ref: '#/components/schemas/AdepDetailsDto' }, { type: 'null' }]
+          x-field-group: route
+        adesDetails:
+          description: 'The additional details on arrival airport (for DEP flight only)'
+          anyOf: [{ $ref: '#/components/schemas/AdesDetailsDto' }, { type: 'null' }]
+          x-field-group: route
+        divertedDetails:
+          description: 'The additional details on arrival airport in case flight is diverted'
+          anyOf: [{ $ref: '#/components/schemas/DivertedDetailsDto' }, { type: 'null' }]
+          x-field-group: route
+        codeShare:
+          description: 'The airline code sharing details model'
+          anyOf: [{ $ref: '#/components/schemas/CodeShareDto' }, { type: 'null' }]
+          x-field-group: route
+        routeIcao:
+          description: 'The flight ICAO route designation'
+          type: [string, 'null']
+          x-field-group: route
+        sobt:
+          description: 'The Scheduled Off-Block Time (SOBT), in ISO date-time format (for DEP flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: schedule
+        sibt:
+          description: 'The flight Scheduled In-Block Time (SIBT), in ISO date-time format (for ARR flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: schedule
+        eobt:
+          description: 'The flight Estimated Off-Block Time (EOBT), in ISO date-time format (for DEP flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: times
+        etot:
+          description: 'The flight Estimated Take-Off Time (ETOT), in ISO date-time format (for DEP flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: times
+        aobt:
+          description: 'The flight Actual Off-Block Time (AOBT), in ISO date-time format (for DEP flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: times
+        atot:
+          description: 'The flight Actual Take-Off Time (ATOT), in ISO date-time format (for DEP flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: times
+        eldt:
+          description: 'The flight Estimated Landing Time (ELDT), in ISO date-time format (for ARR flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: times
+        aldt:
+          description: 'The flight Actual Landing Time (ALDT), in ISO date-time format (for ARR flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: times
+        eibt:
+          description: 'The flight Estimated In-Block Time (EIBT), in ISO date-time format (for ARR flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: times
+        aibt:
+          description: 'The flight Actual In-Block Time (AIBT), in ISO date-time format (for ARR flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: times
+        tobt:
+          description: 'The flight Target Off-Block Time (TOBT), in ISO date-time format (for DEP flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: acdm
+        tsat:
+          description: 'The flight Target Start-up Approuval Time (TSAT), in ISO date-time format (for DEP flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: acdm
+        ttot:
+          description: 'The flight Target Take-Off Time (TTOT), in ISO date-time format (for DEP flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: acdm
+        ctot:
+          description: 'The flight Calculated Take-Off Time (CTOT), in ISO date-time format (for DEP flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: acdm
+        pobt:
+          description: 'The flight Predicted Off-Block Time (POBT - most constrained OBT as calculated by AK), in ISO date-time format (for DEP flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: acdm
+        ardt:
+          description: 'The Aircraft Ready Time (ARDT), in ISO date-time format (for DEP flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: acdm
+        asat:
+          description: 'The flight Actual Start-up Approuval Time (ASAT), in ISO date-time format (for DEP flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: acdm
+        asrt:
+          description: 'The flight Start-up Request Time (ASRT), in ISO date-time format (for DEP flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: acdm
+        efat:
+          description: 'The flight Estimated Final Approach Time (EFAT), in ISO date-time format (for ARR flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: acdm
+        afat:
+          description: 'The flight Actual Final Approach Time (AFAT), in ISO date-time format (for ARR flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: acdm
+        efet:
+          description: 'The flight Estimated FIR Entry Time (EFET), in ISO date-time format (for ARR flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: acdm
+        afet:
+          description: 'The flight Actual FIR Entry Time (AFET), in ISO date-time format (for ARR flight only)'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: acdm
+        eet:
+          description: 'The flight duration (Estimated Elapsed Time, EET), in minutes'
+          type: [integer, 'null']
+          format: int32
+          x-field-group: acdm
+        vtt:
+          description: 'The Variable Taxi Times (VTT) model'
+          anyOf: [{ $ref: '#/components/schemas/VttDto' }, { type: 'null' }]
+          x-field-group: acdm
+        regulation:
+          description: 'The most penalizing regulation model'
+          anyOf: [{ $ref: '#/components/schemas/RegulationDto' }, { type: 'null' }]
+          x-field-group: acdm
+        pkg:
+          description: 'The flight parking'
+          type: [string, 'null']
+          x-field-group: resources
+        gate:
+          description: 'The flight gate'
+          type: [string, 'null']
+          x-field-group: resources
+        gateDetails:
+          description: 'The gate openning details model (for DEP flight only)'
+          anyOf: [{ $ref: '#/components/schemas/GateDetailsDto' }, { type: 'null' }]
+          x-field-group: resources
+        terminal:
+          description: 'The flight terminal'
+          type: [string, 'null']
+          x-field-group: resources
+        hall:
+          description: 'The flight hall'
+          type: [string, 'null']
+          x-field-group: resources
+        counter:
+          description: 'The flight counter (for DEP flight only)'
+          type: [string, 'null']
+          x-field-group: resources
+        carousel:
+          description: 'The baggage belt (for ARR flight only)'
+          type: [string, 'null']
+          x-field-group: resources
+        rwy:
+          description: 'The flight runway'
+          type: [string, 'null']
+          x-field-group: resources
+        sid:
+          description: 'The flight Standard Instrument Departure procedure'
+          type: [string, 'null']
+          x-field-group: resources
+        bridge:
+          description: 'The flight requiring a bridge'
+          type: [string, 'null']
+          x-field-group: resources
+        bus:
+          description: 'The flight requiring a bus'
+          type: [string, 'null']
+          x-field-group: resources
+        deicing:
+          description: 'The flight requiring deicing (for DEP flight only)'
+          type: [boolean, 'null']
+          x-field-group: resources
+        zoneDetails:
+          description: 'The additional details on different flight zones'
+          anyOf: [{ $ref: '#/components/schemas/FlightZoneDetailsDto' }, { type: 'null' }]
+          x-field-group: resources
+        checkInDetails:
+          description: 'The check-in details model (for DEP flight only)'
+          anyOf: [{ $ref: '#/components/schemas/CheckInDetailsDto' }, { type: 'null' }]
+          x-field-group: resources
+        boardingDetails:
+          description: 'The boarding details model (for DEP flight only)'
+          anyOf: [{ $ref: '#/components/schemas/BoardingDetailsDto' }, { type: 'null' }]
+          x-field-group: resources
+        baggageCheckInDetails:
+          description: 'The baggage check-in details model (for DEP flight only)'
+          anyOf: [{ $ref: '#/components/schemas/BaggageCheckInDetailsDto' }, { type: 'null' }]
+          x-field-group: resources
+        baggageDeliveryDetails:
+          description: 'The baggage delivery details model (for ARR flight only)'
+          anyOf: [{ $ref: '#/components/schemas/BaggageDeliveryDetailsDto' }, { type: 'null' }]
+          x-field-group: resources
+        borderControl:
+          description: 'The border control check-point (Police Aux Frontieres, PAF)'
+          type: [string, 'null']
+          x-field-group: resources
+        securityCheckpoint:
+          description: 'The security control check-point (Poste Inspection Filtrage, PIF) (for DEP flight only)'
+          type: [string, 'null']
+          x-field-group: resources
+        publicDisplayed:
+          description: 'The indicator whether the flight is displayed for passengers at the terminals'
+          type: [boolean, 'null']
+          x-field-group: resources
+        reg:
+          description: 'The aircraft registration number (generally, 5 letters)'
+          type: [string, 'null']
+          x-field-group: aircraft
+        acTypeIata:
+          description: 'The aircraft IATA code (3-4 letters/digits)'
+          type: [string, 'null']
+          x-field-group: aircraft
+        acTypeIcao:
+          description: |-
+            The aircraft ICAO code (4 letters/digits)
+            Served value: may be corrected from a reviewed reference table; the AODB value is then in hub.corrections.
+          type: [string, 'null']
+          x-field-group: aircraft
+        aircraftDetails:
+          description: |-
+            The additional aircraft details
+            acTypeName and wtc are served values: a missing value may be filled from the hub's aircraft-type reference (hub.corrections).
+          anyOf: [{ $ref: '#/components/schemas/AircraftDetailsDto' }, { type: 'null' }]
+          x-field-group: aircraft
+        paxCapa:
+          description: |-
+            The aircraft passenger capacity
+            Served value: may be corrected from a reviewed reference table; the AODB value is then in hub.corrections.
+          type: [integer, 'null']
+          format: int32
+          minimum: 0
+          x-field-group: aircraft
+        mtt:
+          description: 'The Minimum Turnaround Time (MTT), in minutes'
+          type: [integer, 'null']
+          format: int32
+          x-field-group: aircraft
+        paxNb:
+          description: 'The number of passengers'
+          type: [integer, 'null']
+          format: int32
+          minimum: 0
+          x-field-group: passengers
+        paxDetails:
+          description: 'The passengers details model'
+          anyOf: [{ $ref: '#/components/schemas/PaxDetailsDto' }, { type: 'null' }]
+          x-field-group: passengers
+        bags:
+          description: 'The total baggage weight (in kg)'
+          type: [integer, 'null']
+          format: int32
+          minimum: 0
+          x-field-group: passengers
+        nationality:
+          description: 'The flight nationality sector'
+          type: [string, 'null']
+          x-field-group: passengers
+        trafficNature:
+          description: 'The flight traffic nature'
+          type: [string, 'null']
+          x-field-group: passengers
+        dlCodes:
+          description: 'The aggregated DL codes model containing DL codes separated by types'
+          anyOf: [{ $ref: '#/components/schemas/DlCodesDto' }, { type: 'null' }]
+          x-field-group: delays
+        remarks:
+          description: 'Any remarks on flight'
+          type: [string, 'null']
+          x-field-group: delays
+        groundHandler:
+          description: 'The ground handling agent'
+          type: [string, 'null']
+          x-field-group: ground_handling
+        ghrAssistance:
+          description: 'The aggregated GHR assistance model containing GHR assistance units required for the flight'
+          anyOf: [{ $ref: '#/components/schemas/GhrAssistanceDto' }, { type: 'null' }]
+          x-field-group: ground_handling
+        ghrOperatorDetails:
+          description: |-
+            The GHR operator information model
+            Contact details (email, phone, address, zipcode, city) are removed by the hub (D-035); name, country and id stay.
+          anyOf: [{ $ref: '#/components/schemas/GhrOperatorDto' }, { type: 'null' }]
+          x-field-group: ground_handling
+        ghrRecordInfo:
+          description: 'The GHR record progress model'
+          anyOf: [{ $ref: '#/components/schemas/GhrRecordDto' }, { type: 'null' }]
+          x-field-group: ground_handling
+        linkedId:
+          description: |-
+            Unique identifier of liked flight:
+            - next departure flight for arrival flight;
+            - previous arrival flight for departure flight
+          type: [string, 'null']
+          x-field-group: rotation
+        hub:
+          $ref: '#/components/schemas/Hub'
+    Hub:
+      type: object
+      description: What the hub adds to a flight. Its fields follow the consumer's groups like the others.
+      required: [referenceTime, inFeed, sameAs]
+      additionalProperties: false
+      properties:
+        referenceTime:
+          description: 'The time that places the flight in a window: scheduled, else estimated, else actual (arrivals: sibt, eibt, eldt, aibt, aldt; departures: sobt, eobt, tobt, etot, aobt, atot). null when the flight has none of them.'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: identity
+        inFeed:
+          description: false once the flight has left the AODB feed (removed_from_feed). The flight is never deleted.
+          type: boolean
+          x-field-group: identity
+        sameAs:
+          description: 'The AODB id of the flight this one is the same as (a person''s decision), or null. Such a flight is left out of /flights lists.'
+          type: [string, 'null']
+          x-field-group: identity
+        rotationNext:
+          description: 'Arrivals: the AODB id of the next departure of the same aircraft, or null.'
+          type: [string, 'null']
+          x-field-group: rotation
+        rotationPrev:
+          description: 'Departures: the AODB id of the previous arrival of the same aircraft, or null.'
+          type: [string, 'null']
+          x-field-group: rotation
+        rotationSource:
+          description: 'How the rotation link was made: aodb (the AODB''s linkedId) or registration (the hub: same registration, next departure after the in-block time, within 24 hours). null without a link.'
+          type: [string, 'null']
+          enum: [aodb, registration, null]
+          x-field-group: rotation
+        minTurnaroundMinutes:
+          description: 'Departures: the AODB''s mtt, else the minimum turnaround time of the aircraft type in the hub''s reference; null otherwise.'
+          type: [integer, 'null']
+          x-field-group: aircraft
+        quality:
+          description: The data-quality flags open on this flight (now, or at as_of). Flags only; the values are not changed.
+          type: array
+          items:
+            $ref: '#/components/schemas/QualityFlag'
+          x-field-group: quality
+        corrections:
+          description: The served values that differ from what the AODB sent, with the reference row that corrected them.
+          type: array
+          items:
+            $ref: '#/components/schemas/Correction'
+          x-field-group: quality
+    QualityFlag:
+      type: object
+      required: [rule, field, since]
+      additionalProperties: false
+      properties:
+        rule:
+          description: 'The rule, for example format_invalid, required_missing, no_actual_after_schedule, actual_early, in_flight_stale, duplicate_suspected, type_missing, capacity_missing, stand_unknown.'
+          type: string
+        field:
+          description: The AODB field concerned, or null when the flag is about the flight as a whole.
+          type: [string, 'null']
+        since:
+          description: When the flag was raised (or raised again).
+          type: string
+          format: date-time
+    Correction:
+      type: object
+      required: [field, aodb, served, reference]
+      additionalProperties: false
+      properties:
+        field:
+          description: The AODB path of the corrected field.
+          type: string
+        aodb:
+          description: The value the AODB sent (null when it sent none).
+        served:
+          description: The value served under the field's name.
+        reference:
+          description: 'The reference row that gave the value, by its natural key (airport_code_corrections:NB0, aircraft_types:<airline>/<type>), or null.'
+          type: [string, 'null']
+    ChangeEvent:
+      type: object
+      required: [cursor, aodbId, observedAt, kind, field, old, new, source]
+      additionalProperties: false
+      properties:
+        cursor:
+          description: The event's position; give the last one you processed (meta.nextCursor) as cursor.
+          type: integer
+          minimum: 1
+        aodbId:
+          description: The flight's AODB id.
+          type: string
+        observedAt:
+          description: When the hub observed the change (UTC; polls every 5 minutes).
+          type: string
+          format: date-time
+        kind:
+          description: first_seen, field_changed, removed_from_feed or returned_to_feed.
+          type: string
+          enum: [first_seen, field_changed, removed_from_feed, returned_to_feed]
+        field:
+          description: 'field_changed: the AODB path (eobt, paxDetails.pmr, …) or hub field (hub.sameAs, hub.rotationNext, hub.rotationPrev). null for the other kinds.'
+          type: [string, 'null']
+        old:
+          description: The value before (null when there was none). A list is one value.
+        new:
+          description: 'The value after (null when the field disappeared). first_seen: the whole flight, as in /flights.'
+        source:
+          description: 'aodb, correction, manual, system or backfill (see "Where a value comes from").'
+          type: string
+          enum: [aodb, correction, manual, system, backfill]
+    Meta:
+      type: object
+      description: Freshness of the data, in every answer.
+      required: [asOf, feed]
+      properties:
+        asOf:
+          description: When the last successful AODB poll finished; null when there has been none.
+          type: [string, 'null']
+          format: date-time
+        feed:
+          description: stale when asOf is more than 15 minutes ago (or null), else ok.
+          type: string
+          enum: [ok, stale]
+    FlightListMeta:
+      allOf:
+        - $ref: '#/components/schemas/Meta'
+      required: [window, requestedAsOf]
+      unevaluatedProperties: false
+      properties:
+        window:
+          description: The window used, [from, to) in UTC.
+          type: object
+          required: [from, to]
+          additionalProperties: false
+          properties:
+            from: {type: string, format: date-time}
+            to: {type: string, format: date-time}
+        requestedAsOf:
+          description: The as_of asked for, or null.
+          type: [string, 'null']
+          format: date-time
+    ChangeListMeta:
+      allOf:
+        - $ref: '#/components/schemas/Meta'
+      required: [cursor, limit, nextCursor, hasMore, headCursor]
+      unevaluatedProperties: false
+      properties:
+        cursor:
+          description: The cursor asked for.
+          type: integer
+          minimum: 0
+        limit:
+          description: Events scanned at most in this call.
+          type: integer
+          minimum: 1
+          maximum: 1000
+        nextCursor:
+          description: The last event scanned (not the last returned); the cursor for the next call. Equal to cursor when nothing was scanned.
+          type: integer
+          minimum: 0
+        hasMore:
+          description: true when events after nextCursor exist.
+          type: boolean
+        headCursor:
+          description: The newest event's cursor (0 when there is none).
+          type: integer
+          minimum: 0
+    PlainMeta:
+      allOf:
+        - $ref: '#/components/schemas/Meta'
+      unevaluatedProperties: false
+    Health:
+      type: object
+      required: [asOf, feed, lastPoll]
+      additionalProperties: false
+      properties:
+        asOf:
+          description: When the last successful AODB poll finished; null when there has been none.
+          type: [string, 'null']
+          format: date-time
+        feed:
+          description: stale when asOf is more than 15 minutes ago (or null), else ok.
+          type: string
+          enum: [ok, stale]
+        lastPoll:
+          description: The last poll, successful or not; null before the first.
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [outcome, finishedAt]
+              additionalProperties: false
+              properties:
+                outcome:
+                  description: 'ok, or why the poll failed: invalid_payload, http_error, timeout, auth_error, login_backoff, forbidden, config_error, rate_limited.'
+                  type: string
+                finishedAt:
+                  type: [string, 'null']
+                  format: date-time
+    FlightList:
+      type: object
+      required: [data, meta]
+      additionalProperties: false
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Flight'
+        meta:
+          $ref: '#/components/schemas/FlightListMeta'
+    FlightOne:
+      type: object
+      required: [data, meta]
+      additionalProperties: false
+      properties:
+        data:
+          $ref: '#/components/schemas/Flight'
+        history:
+          description: With history=1 only.
+          type: array
+          items:
+            $ref: '#/components/schemas/ChangeEvent'
+        meta:
+          $ref: '#/components/schemas/PlainMeta'
+    ChangeList:
+      type: object
+      required: [data, meta]
+      additionalProperties: false
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChangeEvent'
+        meta:
+          $ref: '#/components/schemas/ChangeListMeta'
+    HealthOne:
+      type: object
+      required: [data, meta]
+      additionalProperties: false
+      properties:
+        data:
+          $ref: '#/components/schemas/Health'
+        meta:
+          $ref: '#/components/schemas/PlainMeta'
+    Error:
+      type: object
+      required: [error, message]
+      additionalProperties: false
+      properties:
+        error:
+          description: 'The error code: UNAUTHORIZED, NOT_FOUND, METHOD_NOT_ALLOWED, INVALID_PARAMETER, RATE_LIMITED, SERVER_ERROR (or HTTP_<status> for another refusal by the web server layer).'
+          type: string
+          anyOf:
+            - enum: [UNAUTHORIZED, NOT_FOUND, METHOD_NOT_ALLOWED, INVALID_PARAMETER, RATE_LIMITED, SERVER_ERROR]
+            - pattern: '^HTTP_[0-9]{3}$'
+        message:
+          description: A short explanation, for people.
+          type: string
+    AdepDetailsDto:
+      type: object
+      description: 'The additional details on departure airport (for ARR flight only)'
+      properties:
+        adepName:
+          description: 'The full name of the departure airport'
+          type: [string, 'null']
+        firstAdepIata:
+          description: 'The initial departure airport IATA code (3-letters) in case of stopover'
+          type: [string, 'null']
+        firstAdepIcao:
+          description: 'The initial departure airport ICAO code (4-letters) in case of stopover'
+          type: [string, 'null']
+    AdesDetailsDto:
+      type: object
+      description: 'The additional details on arrival airport (for DEP flight only)'
+      properties:
+        adesName:
+          description: 'The full name of the arrival airport'
+          type: [string, 'null']
+        lastAdesIata:
+          description: 'The final arrival airport IATA code (3-letters) in case of stopover'
+          type: [string, 'null']
+        lastAdesIcao:
+          description: 'The final arrival airport ICAO code (4-letters) in case of stopover'
+          type: [string, 'null']
+    AircraftDetailsDto:
+      type: object
+      description: 'The additional aircraft details'
+      properties:
+        acTypeName:
+          description: 'The full name of the aircraft type'
+          type: [string, 'null']
+        wtc:
+          description: |-
+            The aircraft Wake Turbulence Category (WTC)
+            - J - jumbo
+            - H - heavy
+            - M - medium
+            - L - light
+          type: [string, 'null']
+        mtow:
+          description: 'The aircraft Maximum Takeoff Weight (MTOW), in tons'
+          type: [integer, 'null']
+          format: int32
+          minimum: 0
+    AssistanceUnitDto:
+      type: object
+      description: 'The GHR single assistance unit model'
+      required:
+        - type
+      properties:
+        type:
+          description: 'The predefined assistance type'
+          type: [string, 'null']
+        remark:
+          description: 'Any supplementary information / description'
+          type: [string, 'null']
+    BaggageCheckInDetailsDto:
+      type: object
+      description: 'The baggage check-in details model (for DEP flight only)'
+      properties:
+        belt:
+          description: 'The baggage check-in belt'
+          type: [string, 'null']
+        inspectionSystem:
+          description: 'The baggage inspection system (Inspection Filtrage Bagages en Soute, IFBS)'
+          type: [string, 'null']
+    BaggageDeliveryDetailsDto:
+      type: object
+      description: 'The baggage delivery details model (for ARR flight only)'
+      properties:
+        openTime:
+          description: 'The belt open time, in ISO date-time format'
+          type: [string, 'null']
+          format: date-time
+        closeTime:
+          description: 'The belt close time, in ISO date-time format'
+          type: [string, 'null']
+          format: date-time
+        firstBagTime:
+          description: 'The first bag time, in ISO date-time format'
+          type: [string, 'null']
+          format: date-time
+        lastBagTime:
+          description: 'The last bag time, in ISO date-time format'
+          type: [string, 'null']
+          format: date-time
+        status:
+          description: |-
+            The resource open / close status (applied for check-in, gate, boarding, baggage belt):
+            - NOT_STARTED - the action requiring the resource not started yet
+            - OPEN - the resource is open / action has started
+            - CLOSED - the resource is closed / the action has terminated
+          type: [string, 'null']
+    BoardingDetailsDto:
+      type: object
+      description: 'The boarding details model (for DEP flight only)'
+      properties:
+        startTime:
+          description: 'The start boarding time, in ISO date-time format'
+          type: [string, 'null']
+          format: date-time
+        endTime:
+          description: 'The end boarding time, in ISO date-time format'
+          type: [string, 'null']
+          format: date-time
+        status:
+          description: |-
+            The resource open / close status (applied for check-in, gate, boarding, baggage belt):
+            - NOT_STARTED - the action requiring the resource not started yet
+            - OPEN - the resource is open / action has started
+            - CLOSED - the resource is closed / the action has terminated
+          type: [string, 'null']
+    CheckInDetailsDto:
+      type: object
+      description: 'The check-in details model (for DEP flight only)'
+      properties:
+        openTime:
+          description: 'The check-in open time, in ISO date-time format'
+          type: [string, 'null']
+          format: date-time
+        closeTime:
+          description: 'The check-in close time, in ISO date-time format'
+          type: [string, 'null']
+          format: date-time
+        status:
+          description: |-
+            The resource open / close status (applied for check-in, gate, boarding, baggage belt):
+            - NOT_STARTED - the action requiring the resource not started yet
+            - OPEN - the resource is open / action has started
+            - CLOSED - the resource is closed / the action has terminated
+          type: [string, 'null']
+    CodeShareDto:
+      type: object
+      description: 'The airline code sharing details model'
+      properties:
+        operatingAirlineIata:
+          description: 'The operating airline IATA code (2-letters or letter+digit)'
+          type: [string, 'null']
+        operatingAirlineIcao:
+          description: 'The operating airline ICAO code (3-letters)'
+          type: [string, 'null']
+        flightNumbers:
+          type: [array, 'null']
+          items: { type: string }
+    DivertedDetailsDto:
+      type: object
+      description: 'The additional details on arrival airport in case flight is diverted'
+      properties:
+        filedAdesIata:
+          description: 'The initially filed arrival airport IATA code (3-letters) in case flight is diverted'
+          type: [string, 'null']
+        filedAdesIcao:
+          description: 'The initially filed arrival airport ICAO code (4-letters) in case flight is diverted'
+          type: [string, 'null']
+        divertedAdesIata:
+          description: 'The result diverted arrival airport IATA code (3-letters) in case flight is diverted'
+          type: [string, 'null']
+        divertedAdesIcao:
+          description: 'The result diverted arrival airport ICAO code (4-letters) in case flight is diverted'
+          type: [string, 'null']
+    DlCodeDto:
+      type: object
+      description: 'The enhanced DL code model'
+      required:
+        - code
+      properties:
+        code:
+          description: 'The DL code'
+          type: [string, 'null']
+        delay:
+          description: 'The delay (in minutes)'
+          type: [integer, 'null']
+          format: int32
+          minimum: 0
+        info:
+          description: 'Any supplementary information / description'
+          type: [string, 'null']
+    DlCodesDto:
+      type: object
+      description: 'The aggregated DL codes model containing DL codes separated by types'
+      properties:
+        aodb:
+          description: 'The list of DL codes received from AODB'
+          type: [array, 'null']
+          items: { $ref: '#/components/schemas/DlCodeDto' }
+        typeb:
+          description: 'The list of DL codes received via TYPE-B messages'
+          type: [array, 'null']
+          items: { $ref: '#/components/schemas/DlCodeDto' }
+        ais:
+          description: 'The list of DL codes declared via AK AIS'
+          type: [array, 'null']
+          items: { $ref: '#/components/schemas/DlCodeDto' }
+    FlightZoneDetailsDto:
+      type: object
+      description: 'The additional details on different flight zones'
+      properties:
+        paxZone:
+          description: 'The pax zone (depending on flight origin / destination / nationality)'
+          type: [string, 'null']
+        parkingZone:
+          description: 'The parking zone (depending on the parking)'
+          type: [string, 'null']
+        gateZone:
+          description: 'The gate zone (depending on the gate) (for DEP flight only)'
+          type: [string, 'null']
+    GateDetailsDto:
+      type: object
+      description: 'The gate openning details model (for DEP flight only)'
+      properties:
+        estimatedOpenTime:
+          description: 'The gate estimated open time, in ISO date-time format'
+          type: [string, 'null']
+          format: date-time
+        actualOpenTime:
+          description: 'The gate actual open time, in ISO date-time format'
+          type: [string, 'null']
+          format: date-time
+        estimatedCloseTime:
+          description: 'The gate estimated close time, in ISO date-time format'
+          type: [string, 'null']
+          format: date-time
+        actualCloseTime:
+          description: 'The gate actual close time, in ISO date-time format'
+          type: [string, 'null']
+          format: date-time
+        status:
+          description: |-
+            The resource open / close status (applied for check-in, gate, boarding, baggage belt):
+            - NOT_STARTED - the action requiring the resource not started yet
+            - OPEN - the resource is open / action has started
+            - CLOSED - the resource is closed / the action has terminated
+          type: [string, 'null']
+    GhrAssistanceDto:
+      type: object
+      description: 'The aggregated GHR assistance model containing GHR assistance units required for the flight'
+      properties:
+        selected:
+          description: 'The selected assistance units among the predefined list'
+          type: [array, 'null']
+          items: { $ref: '#/components/schemas/AssistanceUnitDto' }
+        other:
+          description: 'Any other assistances not present in the predefined list'
+          type: [string, 'null']
+    GhrOperatorDto:
+      type: object
+      description: 'The GHR operator information model (email, phone, address, zipcode and city removed by the hub, D-035)'
+      properties:
+        name:
+          description: 'The operator name'
+          type: [string, 'null']
+        country:
+          description: 'The operator addess country'
+          type: [string, 'null']
+        id:
+          description: 'The operator identification code'
+          type: [string, 'null']
+    GhrRecordDto:
+      type: object
+      description: 'The GHR record progress model'
+      properties:
+        status:
+          description: |-
+            The GHR flight record progress status:
+            - ADDED - the record was created and is in progress
+            - TERMINATED - the record is terminated (all required actions fulfilled)
+          type: [string, 'null']
+        assistanceValidated:
+          description: 'The indicator if the GHR assistance was validated'
+          type: [boolean, 'null']
+    PaxDetailsDto:
+      type: object
+      description: 'The passengers details model'
+      properties:
+        estimated:
+          description: 'The estimated number of passengers'
+          type: [integer, 'null']
+          format: int32
+          minimum: 0
+        um:
+          description: 'The number of Unaccompanied Minors'
+          type: [integer, 'null']
+          format: int32
+          minimum: 0
+        pmr:
+          description: 'The number of Persons with Reduced Mobility'
+          type: [integer, 'null']
+          format: int32
+          minimum: 0
+        vip:
+          description: 'The number of VIP passengers'
+          type: [integer, 'null']
+          format: int32
+          minimum: 0
+        other:
+          description: 'The number of passengers of other exceptional categories'
+          type: [integer, 'null']
+          format: int32
+          minimum: 0
+        remarks:
+          description: 'Any remarks conserning passengers'
+          type: [string, 'null']
+    RegulationDto:
+      type: object
+      description: 'The most penalizing regulation model'
+      required:
+        - regul
+      properties:
+        regul:
+          description: 'The regulation ID (as defined by the network provider)'
+          type: [string, 'null']
+        cause:
+          description: 'The regulation cause (code defined by the network provider)'
+          type: [string, 'null']
+        reason:
+          description: 'The regulation reason (among the predefied values defined by the network provider)'
+          type: [string, 'null']
+        description:
+          description: 'The regulation description (providing more details on regulation reason)'
+          type: [string, 'null']
+        remark:
+          description: 'The regulation remark (providing more details on regulation reason in arbitrary format)'
+          type: [string, 'null']
+    VttDto:
+      type: object
+      description: 'The Variable Taxi Times (VTT) model'
+      properties:
+        estimated:
+          description: 'The estimated VTT, in minutes'
+          type: [integer, 'null']
+          format: int32
+          minimum: 0
+        actual:
+          description: 'The actual VTT, in minutes'
+          type: [integer, 'null']
+          format: int32
+          minimum: 0

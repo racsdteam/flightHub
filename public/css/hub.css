@@ -187,6 +187,7 @@ form.inline { margin-top: 12px; }
 /* --- Batch 6b: screens --------------------------------------------------------------------- */
 .page-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
 .page-head h1 { margin: 0; }
+.head-links { display: flex; gap: 16px; align-items: baseline; }
 .subnav { display: flex; gap: 4px; margin-bottom: 16px; }
 .subnav a { color: var(--color-ink-3); text-decoration: none; padding: 5px 10px; border-radius: var(--radius-pulse-sm); border: 1px solid var(--color-border); }
 .subnav a.active { color: var(--color-accent-ink); border-color: var(--color-accent); background: var(--color-accent-soft); }

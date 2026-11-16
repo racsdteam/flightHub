@@ -1,6 +1,7 @@
 <div>
     <div class="page-head"><h1>Consumers</h1>
-        @unless ($creating)<button type="button" class="button button-small" wire:click="startCreate">New consumer</button>@endunless</div>
+        <div class="head-links"><a href="{{ route('api.docs') }}">API documentation</a>
+        @unless ($creating)<button type="button" class="button button-small" wire:click="startCreate">New consumer</button>@endunless</div></div>
 
     @if ($creating)
         <form wire:submit="create" class="card section" novalidate>

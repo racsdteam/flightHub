@@ -7,8 +7,9 @@ return [
     | KIA AODB (Innov'ATM "Airport Keeper External API" v3.2.5)
     |--------------------------------------------------------------------------
     |
-    | Credentials exist only in the server .env (D-003). The fixture client
-    | serves tests/Fixtures/aodb/ and is refused when APP_ENV=production.
+    | Credentials exist only in the server .env, and in Dany's local .env for
+    | his own live tests (D-050). The fixture client serves tests/Fixtures/aodb/
+    | and is refused when APP_ENV=production.
     |
     */
 

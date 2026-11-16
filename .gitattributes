@@ -12,3 +12,6 @@ CHANGELOG.md export-ignore
 
 # Third-party font files are kept byte-for-byte as downloaded (D-042).
 /public/fonts/* -text
+
+# Swagger UI (swagger-ui-dist) is kept byte-for-byte as downloaded.
+/public/vendor/swagger-ui/* -text

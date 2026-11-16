@@ -1,1 +1,15 @@
-{ "attribution": { "commit": "", "pr": "" } }
+{
+    "attribution": { "commit": "", "pr": "" },
+    "permissions": {
+        "deny": [
+            "Read(./.env)",
+            "Read(./.env.testing)",
+            "Read(./.env.local)",
+            "Read(./.env.production)",
+            "Edit(./.env)",
+            "Edit(./.env.testing)",
+            "Edit(./.env.local)",
+            "Edit(./.env.production)"
+        ]
+    }
+}

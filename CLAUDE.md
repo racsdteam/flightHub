@@ -22,8 +22,11 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   .env* file except .env.example. No secret in code, tests, fixtures, logs, commit messages
   or reports.
 - .env.example lists every key with empty secret values.
-- AODB credentials never exist on this Mac. Local work uses recorded fixtures; the live API
-  is called only on the server.
+- Real AODB credentials exist only in the server's .env and, for Dany's own local testing,
+  in his local .env (D-050: mode 600, git-ignored, blocked by the pre-commit hook, never in
+  an iCloud-synced folder). .claude/settings.json denies Claude Code reading or editing
+  .env, .env.testing, .env.local and .env.production. Claude Code works with recorded
+  fixtures only.
 
 ## Git
 - Never commit anything under docs/. Never git add -f. Never --no-verify.
@@ -129,7 +132,8 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   is in the window if any of its OBT/TOT times is inside; an ARR if any of its LDT/IBT
   times is inside. GET /flights/v1/byid?airport=HRYR&ids=a,b,… for flights missing from a
   poll.
-- Never call the live AODB API from this Mac: no credentials exist here (D-003). Every test
+- Claude Code never runs a command that reaches the live AODB API (hub:poll or hub:backfill
+  with AODB_CLIENT=http, curl to the AODB). Dany runs live polls himself (D-050). Every test
   uses Http::fake() with Http::preventStrayRequests().
 - Never log, print, store unencrypted, or put in an exception message: the AODB password,
   the token, an Authorization header, or any /login request or response body.
@@ -151,6 +155,11 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   ids, reference rows their natural keys.
 - Every call is logged in api_calls (append-only, 1 year, D-036), never the key or the
   Authorization header.
+- Documentation (D-051): resources/api/flighthub-v1.openapi.yaml (OpenAPI 3.1, hand-written)
+  is served at /api/openapi.yaml and shown by Swagger UI (public/vendor/swagger-ui, served by
+  the hub) at /api/docs: public, read-only, no session (routes/docs.php, outside the web
+  group). Every API change updates the document; tests/Feature/ApiDocs check it against the
+  routes, the field groups and real responses.
 
 ## Admin screens
 - Fortify (sign-in only; its routes are registered in routes/web.php) + Livewire, Blade, one
@@ -173,8 +182,8 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   keys, session ids.
 - CSP: default-src 'none'; scripts and styles only from the hub or with the per-request
   nonce; no 'unsafe-eval', no 'unsafe-inline' (Livewire's CSP-safe build). No inline style
-  attributes or event handlers in templates; the only own script is public/js/hub.js (copy
-  buttons).
+  attributes or event handlers in templates; the own scripts are public/js/hub.js (copy
+  buttons) and public/js/api-docs.js (starts Swagger UI on /api/docs).
 - Screen map (each route carries its ability; every Livewire screen re-checks it on every
   request, App\Livewire\AdminPage::boot):
   Feed health /, Flights /flights and /flights/{aodbId}, Quality /quality and

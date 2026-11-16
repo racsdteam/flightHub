@@ -35,9 +35,9 @@ distributes it to other RAC systems through its own API.
    databases as DDL (the two migrate commands above), then run apply-grants.sh.
    Verify with `php artisan hub:check-grants` and `php artisan hub:check-grants --env=testing`.
 
-5. Poll locally without the live API (no AODB credentials exist on this Mac): the
-   fixture client serves the newest file in `tests/Fixtures/aodb/`. It is refused when
-   APP_ENV=production.
+5. Poll locally without the live API: the fixture client serves the newest file in
+   `tests/Fixtures/aodb/`. It is refused when APP_ENV=production. (Live polls: Dany only,
+   see "Local testing" below.)
 
        AODB_CLIENT=fixture php artisan hub:poll
 
@@ -58,3 +58,50 @@ distributes it to other RAC systems through its own API.
    `flighthub_test`, never SQLite):
 
        composer test
+
+## Local testing
+
+The whole hub runs on this Mac against its own local database. Use PHP 8.3
+(`PHP=/opt/homebrew/opt/php@8.3/bin/php` below).
+
+1. Start the database (and check it):
+
+       scripts/local-db/start.sh
+       scripts/local-db/status.sh
+
+2. Create an admin account. The temporary password is printed once; the first sign-in
+   asks for a new password and TOTP enrolment:
+
+       $PHP artisan hub:admin-create you@rac.co.rw "Your Name" --role=admin
+
+3. Serve on PHP 8.3 at http://127.0.0.1:8000 (the local server listed in the API
+   document):
+
+       $PHP artisan serve --host=127.0.0.1 --port=8000
+
+4. Choose the data source:
+   - **Fixture mode**: the newest file in `tests/Fixtures/aodb/`, no network. An
+     environment variable wins over `.env`:
+
+         AODB_CLIENT=fixture $PHP artisan hub:poll
+
+   - **Live mode** (Dany only, D-050): `AODB_CLIENT=http` and the real AODB credentials in
+     your local `.env` (`chmod 600 .env`; git-ignored; refused by the pre-commit hook;
+     never in an iCloud-synced folder). Only Dany runs live polls; Claude Code never runs a
+     command that reaches the AODB and cannot read `.env`.
+
+5. Run the scheduler in the foreground (hub:poll every 5 minutes, check-feed, re-apply,
+   prunes; Ctrl-C stops it). It polls with the client chosen above, so prefix it with
+   `AODB_CLIENT=fixture` to stay offline:
+
+       AODB_CLIENT=fixture $PHP artisan schedule:work
+
+6. Create a consumer and a key (or use the Consumers screen). The key is printed once:
+
+       $PHP artisan hub:consumer-create local-test "Local test" --groups=route,schedule,times,quality --by="Your Name"
+       $PHP artisan hub:key-issue local-test --label="local testing" --by="Your Name"
+
+7. Open http://127.0.0.1:8000/api/docs, click **Authorize**, paste the key, then
+   **Try it out**. The page keeps the key in memory only; every call is logged in
+   `api_calls` like any other. The document itself is `/api/openapi.yaml`
+   (`resources/api/flighthub-v1.openapi.yaml`).
