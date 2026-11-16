@@ -100,6 +100,10 @@ class ApiContractTest extends PollTestCase
             } while ($response->json('meta.hasMore'));
 
             OpenApi::assertResponse($this->api("changes?cursor={$cursor}", $key)->assertOk(), '/changes');
+            // A limit above 1000 is reduced to 1000, as the document says (Batch 9b, D5).
+            $big = $this->api('changes?cursor=0&limit=5000', $key)->assertOk();
+            OpenApi::assertResponse($big, '/changes');
+            $this->assertSame(1000, $big->json('meta.limit'));
             $who === 'every group' ? $this->assertSame($all, $seen) : $this->assertLessThan($all, $seen);
         }
     }

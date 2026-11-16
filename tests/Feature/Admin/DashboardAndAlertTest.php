@@ -31,7 +31,7 @@ class DashboardAndAlertTest extends PollTestCase
             ->assertSee('09:42:30')                                  // last good poll, Kigali time
             ->assertSee('title="UTC 2026-10-29 07:42:30"', false)    // UTC in the title attribute
             ->assertSee('just now')
-            ->assertSeeInOrder(['Last poll', 'OK', 'ok', 'HTTP 200'])
+            ->assertSeeInOrder(['Last poll', 'title="Outcome: ok"', 'OK', 'HTTP 200'], false)
             ->assertSeeInOrder(['AODB pauses', 'None'])
             ->assertSeeInOrder(["Today's flights", (string) $expected->count(), 'Total flights'], false)
             ->assertSeeInOrder([(string) $expected->where('flow', 'ARR')->count(), 'Arrivals (ARR)', (string) $expected->where('flow', 'DEP')->count(), 'Departures (DEP)'])

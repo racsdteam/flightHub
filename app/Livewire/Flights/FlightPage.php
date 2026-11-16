@@ -24,6 +24,9 @@ class FlightPage extends AdminPage
 
     public string $aodbId;
 
+    /** Display only: the cards whose empty fields are shown (group → true). */
+    public array $showEmpty = [];
+
     protected function ability(): string
     {
         return 'view-hub';

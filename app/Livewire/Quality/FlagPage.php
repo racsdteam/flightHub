@@ -3,14 +3,11 @@
 namespace App\Livewire\Quality;
 
 use App\Livewire\AdminPage;
-use App\Quality\FlagResolver;
 use App\Quality\FlightRules;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
-use InvalidArgumentException;
 use Livewire\Attributes\Title;
-use RuntimeException;
 
 /**
  * One flag: details, flight, events; resolutions through FlagResolver
@@ -20,9 +17,9 @@ use RuntimeException;
 #[Title('Quality flag')]
 class FlagPage extends AdminPage
 {
-    public int $flagId;
+    use ResolvesFlags;
 
-    public string $note = '';
+    public int $flagId;
 
     public bool $confirmingSameAs = false;
 
@@ -41,18 +38,18 @@ class FlagPage extends AdminPage
     {
         Gate::authorize('manage-quality');
         $this->confirmingSameAs = false;
-        $value = $resolution === 'none' ? null : $resolution;
-        if (! in_array($value, ['fixed', 'ignored', 'reported', null], true)) {
+        [$known, $value] = $this->askedResolution($resolution);
+        if (! $known) {
             $this->addError('note', 'Unknown resolution.');
 
             return;
         }
-        if (in_array($value, ['ignored', 'reported'], true) && trim($this->note) === '') {
+        if ($this->noteMissing($value)) {
             $this->addError('note', 'A note is required for '.$value.'.');
 
             return;
         }
-        $this->apply($value);
+        $this->applyResolution($this->flagId, $value);
     }
 
     public function askSameAs(): void
@@ -70,18 +67,7 @@ class FlagPage extends AdminPage
     {
         Gate::authorize('manage-quality');
         $this->confirmingSameAs = false;
-        $this->apply('same_as');
-    }
-
-    private function apply(?string $resolution): void
-    {
-        try {
-            (new FlagResolver)->resolve($this->flagId, $resolution, (string) auth()->user()->email, trim($this->note) === '' ? null : trim($this->note));
-            $this->note = '';
-            session()->flash('status', $resolution === null ? 'Resolution removed.' : "Resolution set: {$resolution}.");
-        } catch (InvalidArgumentException|RuntimeException $e) {
-            $this->addError('note', $e->getMessage());
-        }
+        $this->applyResolution($this->flagId, 'same_as');
     }
 
     public function render(): View

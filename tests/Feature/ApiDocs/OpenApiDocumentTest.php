@@ -4,6 +4,8 @@ namespace Tests\Feature\ApiDocs;
 
 use App\Collector\FlightNormaliser;
 use Illuminate\Support\Facades\Route;
+use Opis\JsonSchema\CompliantValidator;
+use Opis\JsonSchema\Errors\ErrorFormatter;
 use Tests\TestCase;
 use Throwable;
 
@@ -13,11 +15,15 @@ use Throwable;
  *
  * "Valid" is checked here structurally (fields, status codes, path templates,
  * $refs, security, tags, operation ids) and by compiling every schema as JSON
- * Schema 2020-12 and validating every example against its schema. The official
- * OpenAPI meta-schema is not used (it would be one more downloaded file).
+ * Schema 2020-12 and validating every example against its schema; and (Batch 9b)
+ * against the official OpenAPI 3.1 meta-schema stored in tests/Fixtures.
  */
 class OpenApiDocumentTest extends TestCase
 {
+    private const META_SCHEMA_ID = 'https://spec.openapis.org/oas/3.1/schema/2022-10-07';
+
+    private const META_SCHEMA_SHA256 = 'da01ba28852cac0de53893797cb8d1942bc3b05084f526dcc216717dec314ed0';
+
     private const OPERATIONS = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'];
 
     public function test_the_document_is_openapi_3_1_with_its_info_servers_and_bearer_key(): void
@@ -294,6 +300,38 @@ class OpenApiDocumentTest extends TestCase
         $this->assertSame([...$identity, 'hub'], $schemas['Flight']['required']);
     }
 
+    /**
+     * D4 (Batch 9b): the document validates against the official OpenAPI 3.1 meta-schema,
+     * stored once in the repo: https://spec.openapis.org/oas/3.1/schema/2022-10-07
+     * (tests/Fixtures/openapi-3.1-schema.json, sha256 below).
+     */
+    public function test_the_document_validates_against_the_official_openapi_3_1_meta_schema(): void
+    {
+        $file = base_path('tests/Fixtures/openapi-3.1-schema.json');
+        $this->assertSame(self::META_SCHEMA_SHA256, hash_file('sha256', $file), 'the stored meta-schema is the downloaded one');
+        $raw = (string) file_get_contents($file);
+        $this->assertSame(self::META_SCHEMA_ID, json_decode($raw)->{'$id'});
+        // opis/json-schema resolves "$dynamicRef": "#meta" to the document root instead of the
+        // "$dynamicAnchor": "meta" in $defs/schema. In this meta-schema nothing else declares
+        // that anchor, so it means exactly "#/$defs/schema": the rewrite is done in memory only.
+        $this->assertSame(1, substr_count($raw, '"$dynamicAnchor": "meta"'));
+        $this->assertGreaterThan(0, substr_count($raw, '"$dynamicRef": "#meta"'));
+        $schema = json_decode(str_replace('"$dynamicRef": "#meta"', '"$ref": "#/$defs/schema"', $raw), false, 512, JSON_THROW_ON_ERROR);
+
+        $validator = new CompliantValidator(null, 20, false);
+        $validator->resolver()->registerRaw($schema, self::META_SCHEMA_ID);
+        $result = $validator->validate(OpenApi::document(), self::META_SCHEMA_ID);
+
+        $errors = $result->isValid() ? [] : (new ErrorFormatter)->format($result->error(), true);
+        $this->assertSame([], $errors);
+
+        // And it refuses a broken document (the check is real).
+        $broken = clone OpenApi::document();
+        $broken->openapi = '2.0';
+        unset($broken->info);
+        $this->assertFalse($validator->validate($broken, self::META_SCHEMA_ID)->isValid());
+    }
+
     public function test_claude_code_may_not_read_or_edit_the_env_files(): void
     {
         $settings = json_decode((string) file_get_contents(base_path('.claude/settings.json')), true, 512, JSON_THROW_ON_ERROR);
@@ -302,6 +340,13 @@ class OpenApiDocumentTest extends TestCase
         foreach (['.env', '.env.testing', '.env.local', '.env.production'] as $file) {
             foreach (['Read', 'Edit'] as $tool) {
                 $this->assertContains("{$tool}(./{$file})", $deny);
+            }
+            // Batch 9b: the common shell readers, with and without arguments, both path spellings.
+            foreach (['cat', 'less', 'more', 'head', 'tail', 'grep', 'sed', 'awk'] as $command) {
+                foreach (["{$file}", "./{$file}"] as $path) {
+                    $this->assertContains("Bash({$command} {$path})", $deny);
+                    $this->assertContains("Bash({$command} * {$path})", $deny);
+                }
             }
         }
         $this->assertSame([], array_values(array_filter($deny, fn ($rule) => str_contains($rule, '.env.example'))), '.env.example stays readable');

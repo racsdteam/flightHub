@@ -52,6 +52,7 @@
             </summary>
             <div class="menu">
                 <p class="menu-who"><span>{{ $user->name }}</span><span class="muted">{{ $user->role === 'admin' ? 'Admin' : 'Data steward' }}</span></p>
+                @if ($ready)<a class="menu-item" href="{{ route('password.change') }}">Change password</a>@endif
                 <form method="POST" action="{{ route('logout') }}">
                     @csrf
                     <button type="submit" class="menu-item">Sign out</button>

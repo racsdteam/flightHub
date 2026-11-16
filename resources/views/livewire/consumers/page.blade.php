@@ -31,7 +31,7 @@
 
             <section class="card">
                 <div class="card-head"><h2><x-icon name="shield" size="20" /> Allowed field groups</h2></div>
-                <p class="card-sub">Ticked groups are included in this consumer's API responses. A field in no group is never served.</p>
+                <p class="card-sub">Ticked groups are included in this consumer's API responses.</p>
                 <table class="kv groups-table">
                     <thead><tr><th scope="col"><span class="visually-hidden">Allowed</span></th><th scope="col">Field group</th><th scope="col">Fields</th></tr></thead>
                     <tbody>

@@ -8,21 +8,23 @@
         </div>
     </div>
 
+    @if (session('status'))<div class="banner banner-ok" role="status"><x-icon name="check-circle" size="20" /><p>{{ session('status') }}</p></div>@endif
+
     <div class="rule-tiles">
         <div class="card rule-tile summary">
-            <span class="tile-label"><x-icon name="shield" size="20" /></span>
-            <p class="tile-value">{{ $openNow }}</p>
-            <span>Open flags</span>
+            <x-icon name="shield" size="20" />
+            <span class="tile-value">{{ $openNow }}</span>
+            <span class="rule-label">Open flags</span>
             @if ($openTrend > 0)<x-chip tone="error" icon="arrow-up">+{{ $openTrend }} vs 24 h ago</x-chip>
             @elseif ($openTrend < 0)<x-chip tone="ok" icon="arrow-down">{{ $openTrend }} vs 24 h ago</x-chip>
             @else<x-chip tone="disabled" icon="minus">0 vs 24 h ago</x-chip>@endif
         </div>
         <div class="card rule-tile summary">
-            <span class="tile-label"><x-icon name="check-circle" size="20" /></span>
-            <p class="tile-value">{{ $clearedDay }}</p>
-            <span>Cleared in the last 24 h</span>
+            <x-icon name="check-circle" size="20" />
+            <span class="tile-value">{{ $clearedDay }}</span>
+            <span class="rule-label">Cleared, last 24 h</span>
             @php($d = $clearedDay - $clearedPrev)
-            <x-chip :tone="$d === 0 ? 'disabled' : 'neutral'" :icon="$d > 0 ? 'arrow-up' : ($d < 0 ? 'arrow-down' : 'minus')">{{ $d > 0 ? '+' : '' }}{{ $d }} vs previous 24 h</x-chip>
+            <x-chip :tone="$d === 0 ? 'disabled' : 'neutral'" :icon="$d > 0 ? 'arrow-up' : ($d < 0 ? 'arrow-down' : 'minus')">{{ $d > 0 ? '+' : '' }}{{ $d }} vs 24 h before</x-chip>
         </div>
         @foreach ($counts as $r => $n)
             <button type="button" class="card rule-tile" wire:click="$set('rule', '{{ $rule === $r ? '' : $r }}')" aria-pressed="{{ $rule === $r ? 'true' : 'false' }}">
@@ -52,20 +54,44 @@
         @else
         <div class="table-wrap">
             <table class="table">
-                <thead><tr><th scope="col">Rule</th><th scope="col">Flight</th><th scope="col">Field</th><th scope="col">State</th><th scope="col">Resolution</th><th scope="col">Note</th><th scope="col">First detected</th><th scope="col">Last detected</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+                <thead><tr><th scope="col">Rule</th><th scope="col">Flight</th><th scope="col">Field</th><th scope="col">State</th><th scope="col">Resolution</th><th scope="col">Detected</th><th scope="col">Actions</th></tr></thead>
                 <tbody>
                 @foreach ($flags as $f)
                     <tr wire:key="flag-{{ $f->id }}" @class(['row-error' => $f->state === 'open' && ! $f->resolution])>
                         <td><span class="cell-flight"><x-icon :name="Display::RULE_ICONS[$f->rule] ?? 'shield'" /><a href="{{ route('quality.flag', $f->id) }}" class="mono">{{ $f->rule }}</a></span></td>
-                        <td><a href="{{ route('flights.show', $f->aodb_id) }}" class="mono">{{ $f->full_flight_number }} {{ $f->flow }}</a><span class="sub"><x-time :at="$f->reference_time" format="Y-m-d H:i" /></span></td>
-                        <td class="mono">{{ $f->field ?? '—' }}</td>
+                        <td class="nowrap"><a href="{{ route('flights.show', $f->aodb_id) }}" class="mono">{{ $f->full_flight_number }} {{ $f->flow }}</a><span class="sub"><x-time :at="$f->reference_time" format="m-d H:i" /></span></td>
+                        <td>@if ($f->field){{ Display::fieldLabel($f->field) }}<span class="sub mono">{{ $f->field }}</span>@else<span class="muted">—</span>@endif</td>
                         <td>@if ($f->state === 'open')<x-chip tone="error" icon="alert">Open</x-chip>@else<x-chip tone="ok" icon="check-circle">Cleared</x-chip>@endif</td>
-                        <td>@if ($f->resolution)<x-chip tone="info" icon="check">{{ str_replace('_', ' ', $f->resolution) }}</x-chip>@else<span class="muted">—</span>@endif</td>
-                        <td class="small">{{ $f->resolution_note ? \Illuminate\Support\Str::limit($f->resolution_note, 60) : '—' }}</td>
-                        <td><x-time :at="$f->first_detected_at" /></td>
-                        <td><x-time :at="$f->last_detected_at" /></td>
-                        <td><a class="button button-secondary button-xs" href="{{ route('quality.flag', $f->id) }}">@can('manage-quality') Resolve @else View @endcan <x-icon name="arrow-right" size="14" /></a></td>
+                        <td>@if ($f->resolution)<x-chip tone="info" icon="check">{{ str_replace('_', ' ', $f->resolution) }}</x-chip>@if ($f->resolution_note)<span class="sub">{{ \Illuminate\Support\Str::limit($f->resolution_note, 60) }}</span>@endif @else<span class="muted">—</span>@endif</td>
+                        <td class="nowrap"><x-time :at="$f->first_detected_at" format="m-d H:i" /><span class="sub">last <x-time :at="$f->last_detected_at" format="m-d H:i" /></span></td>
+                        <td>
+                            <div class="actions row-actions">
+                                @if ($canAct)
+                                    <button type="button" class="button button-xs button-secondary" wire:click="resolve({{ $f->id }}, 'fixed')" @disabled($f->resolution === 'fixed')><x-icon name="check" size="14" /> Fixed</button>
+                                    <button type="button" class="button button-xs button-secondary" wire:click="resolve({{ $f->id }}, 'ignored')" @disabled($f->resolution === 'ignored')><x-icon name="minus" size="14" /> Ignored</button>
+                                    <button type="button" class="button button-xs button-secondary" wire:click="resolve({{ $f->id }}, 'reported')" @disabled($f->resolution === 'reported')><x-icon name="arrow-up" size="14" /> Reported</button>
+                                    @if ($f->rule === 'duplicate_suspected' && $f->related_flight_id && $f->resolution !== 'same_as')
+                                        <button type="button" class="button button-xs button-danger" wire:click="askSameAs({{ $f->id }})"><x-icon name="duplicate" size="14" /> Same as</button>
+                                    @endif
+                                    @if ($f->resolution)<button type="button" class="button button-xs button-quiet" wire:click="resolve({{ $f->id }}, 'none')">Remove resolution</button>@endif
+                                @endif
+                                <a class="button button-xs button-quiet" href="{{ route('quality.flag', $f->id) }}">Open <x-icon name="arrow-right" size="14" /></a>
+                            </div>
+                        </td>
                     </tr>
+                    @if ($canAct && $noteFor === $f->id)
+                        <tr class="note-row" wire:key="note-{{ $f->id }}">
+                            <td colspan="7">
+                                <div class="note-inline">
+                                    <label for="note-{{ $f->id }}">Note for “{{ $noteResolution }}” <span class="muted">(required)</span></label>
+                                    <input id="note-{{ $f->id }}" wire:model="note" maxlength="500" placeholder="Why, or where it was reported" autofocus>
+                                    <button type="button" class="button button-xs" wire:click="resolve({{ $f->id }}, '{{ $noteResolution }}')">Save “{{ $noteResolution }}”</button>
+                                    <button type="button" class="button button-xs button-secondary" wire:click="cancelNote">Cancel</button>
+                                </div>
+                                @error('note') <p class="field-error" role="alert">{{ $message }}</p> @enderror
+                            </td>
+                        </tr>
+                    @endif
                 @endforeach
                 </tbody>
             </table>
@@ -73,4 +99,8 @@
         {{ $flags->links() }}
         @endif
     </div>
+
+    @if ($canAct && $dialog)
+        @include('livewire.quality.same-as-dialog', $dialog)
+    @endif
 </div>

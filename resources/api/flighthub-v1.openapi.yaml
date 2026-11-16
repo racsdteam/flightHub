@@ -796,8 +796,8 @@ components:
     limit:
       name: limit
       in: query
-      description: 'Events scanned per call: default 500, at most 1000 (a larger value is treated as 1000).'
-      schema: {type: integer, minimum: 1, maximum: 1000, default: 500}
+      description: 'Events scanned per call: default 500. Values above 1000 are reduced to 1000; anything that is not a positive whole number is refused (422).'
+      schema: {type: integer, minimum: 1, default: 500}
     aodbId:
       name: aodbId
       in: path

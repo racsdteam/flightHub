@@ -151,6 +151,8 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   to flights, history, first_seen values and /changes.
 - /changes: meta.nextCursor = the last event id SCANNED (not the last returned), so events
   a consumer may not see never block it.
+- CORS is off (config/cors.php, paths []): no response carries Access-Control-Allow-Origin;
+  consumers call server to server, /api/docs from the same origin (tests/Feature/Api/CorsTest).
 - No internal ids in responses: flights are named by their AODB id, hub links carry AODB
   ids, reference rows their natural keys.
 - Every call is logged in api_calls (append-only, 1 year, D-036), never the key or the

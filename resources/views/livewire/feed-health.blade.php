@@ -60,7 +60,7 @@
             <h2 class="tile-label"><x-icon name="server" /> Last poll</h2>
             @if ($last)
                 @php([$tone, $icon, $word] = Display::pollChip($last->outcome))
-                <span><x-chip :tone="$tone" :icon="$icon">{{ $word }}</x-chip> <span class="code">{{ $last->outcome }}</span></span>
+                <span><x-chip :tone="$tone" :icon="$icon" title="Outcome: {{ $last->outcome }}">{{ $word }}@if ($tone !== 'ok') · {{ str_replace('_', ' ', $last->outcome) }}@endif</x-chip></span>
                 <p class="tile-sub">HTTP {{ $last->http_status ?? '—' }} · <x-time :at="$last->finished_at" format="H:i:s" /></p>
                 @if ($last->error_summary)<p class="tile-sub mono">{{ $last->error_summary }}</p>@endif
             @else
@@ -92,7 +92,7 @@
                 <h2><x-icon name="plane" size="20" /> Today's flights</h2>
                 <span class="code">Source: AODB</span>
             </div>
-            <p class="card-sub">Kigali day <x-time :at="$day->from" format="Y-m-d" /> · in feed, not hidden as "same as"</p>
+            <p class="card-sub">Kigali day <x-time :at="$day->from" format="Y-m-d" /></p>
             <div class="split">
                 <div><span class="big-number">{{ $total }}</span><span class="label">Total flights</span></div>
                 <span class="divider"></span>
@@ -219,14 +219,13 @@
         @else
             <div class="table-wrap">
                 <table class="table">
-                    <thead><tr><th scope="col">Started (Kigali time)</th><th scope="col">Result</th><th scope="col">Outcome</th><th scope="col">HTTP status</th><th scope="col">Source</th><th scope="col" class="num">Duration ms</th><th scope="col">Details</th></tr></thead>
+                    <thead><tr><th scope="col">Started (Kigali time)</th><th scope="col">Result</th><th scope="col">HTTP status</th><th scope="col">Source</th><th scope="col" class="num">Duration ms</th><th scope="col">Details</th></tr></thead>
                     <tbody>
                     @foreach ($recent as $poll)
                         @php([$tone, $icon, $word] = Display::pollChip($poll->outcome))
                         <tr wire:key="poll-{{ $poll->id }}" @class(['row-error' => $tone === 'error'])>
                             <td><x-time :at="$poll->started_at" format="Y-m-d H:i:s" /></td>
-                            <td><x-chip :tone="$tone" :icon="$icon">{{ $word }}</x-chip></td>
-                            <td class="mono">{{ $poll->outcome }}</td>
+                            <td><x-chip :tone="$tone" :icon="$icon" title="Outcome: {{ $poll->outcome }}">{{ $word }}</x-chip></td>
                             <td class="mono">{{ $poll->http_status ?? '—' }}</td>
                             <td><span class="code code-src">AODB</span></td>
                             <td class="num">{{ $poll->duration_ms }}</td>
