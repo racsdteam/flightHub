@@ -57,6 +57,10 @@ class ApiDocsPageTest extends TestCase
         $this->assertStringContainsString('queryConfigEnabled: false', $script);
         $this->assertStringContainsString("docExpansion: 'list'", $script, 'operations listed, each collapsed');
         $this->assertStringContainsString('defaultModelsExpandDepth: -1', $script, 'no Schemas section');
+
+        // The version badges and the link to the raw document are hidden in the docs frame only.
+        $css = (string) file_get_contents(public_path('css/hub.css'));
+        $this->assertStringContainsString(".docs-frame .swagger-ui .info .title small,\n.docs-frame .swagger-ui .info hgroup.main a { display: none; }", $css);
         $this->assertDoesNotMatchRegularExpression('#https?://#', $script);
     }
 

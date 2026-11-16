@@ -589,6 +589,10 @@ textarea { min-height: 80px; resize: vertical; }
 .docs-frame { min-height: 100vh; background: var(--color-surface); }
 .docs-frame .topbar .docs-title { margin-left: auto; color: var(--color-text-on-navy-muted); font-size: var(--text-small); font-weight: 600; }
 .docs-frame #swagger-ui { max-width: 1460px; margin: 0 auto; padding: 0 var(--space-3) var(--space-4); }
+/* No version or "OAS 3.1" badges and no link to the raw document under the title
+   (the document stays served at /api/openapi.yaml: Swagger UI loads it from there). */
+.docs-frame .swagger-ui .info .title small,
+.docs-frame .swagger-ui .info hgroup.main a { display: none; }
 
 /* ── Error pages ────────────────────────────────────────────────────────────────────────── */
 .error-page { max-width: 560px; margin: var(--space-6) auto 0; text-align: center; }
