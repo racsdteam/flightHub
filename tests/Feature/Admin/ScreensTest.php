@@ -166,7 +166,7 @@ class ScreensTest extends PollTestCase
 
         Livewire::test(FlagPage::class, ['flag' => $flag])
             ->call('askSameAs')
-            ->assertSeeInOrder(['HIDDEN', self::TK606_ARR_TK, 'KEPT', self::TK606_ARR_IST])
+            ->assertSeeInOrder(['FLIGHT TO HIDE', self::TK606_ARR_TK, 'FLIGHT TO KEEP', self::TK606_ARR_IST])
             ->call('confirmSameAs')
             ->assertHasNoErrors();
 

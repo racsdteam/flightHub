@@ -120,8 +120,16 @@ class ConsumerPage extends AdminPage
     public function render(): View
     {
         $consumer = $this->consumer();
+        // Display only: usage summary from api_calls (Kigali days).
+        $today = CarbonImmutable::now('Africa/Kigali')->startOfDay();
+        $calls = fn () => DB::table('api_calls')->where('consumer_id', $consumer->id);
 
         return view('livewire.consumers.page', [
+            'usage' => [
+                'today' => $calls()->where('at', '>=', $today->utc()->format('Y-m-d H:i:s'))->count(),
+                'week' => $calls()->where('at', '>=', $today->subDays(6)->utc()->format('Y-m-d H:i:s'))->count(),
+                'last' => $calls()->orderByDesc('id')->first(['at', 'status', 'path']),
+            ],
             'consumer' => $consumer,
             'groupFields' => array_diff_key(config('api_fields.groups'), array_flip(config('api_fields.always'))),
             'identity' => config('api_fields.groups.identity'),

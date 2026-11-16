@@ -27,16 +27,17 @@ class DashboardAndAlertTest extends PollTestCase
 
         Livewire::test(FeedHealth::class)
             ->assertSee('wire:poll.60s', false)
-            ->assertSeeInOrder(['Feed', 'OK'])
+            ->assertSeeInOrder(['Feed state: OK', 'Feed', 'OK'])
             ->assertSee('09:42:30')                                  // last good poll, Kigali time
             ->assertSee('title="UTC 2026-10-29 07:42:30"', false)    // UTC in the title attribute
             ->assertSee('just now')
-            ->assertSeeInOrder(['Last poll', 'ok', 'HTTP 200'])
+            ->assertSeeInOrder(['Last poll', 'OK', 'ok', 'HTTP 200'])
             ->assertSeeInOrder(['AODB pauses', 'None'])
-            ->assertSeeInOrder(['Flights today', (string) $expected->count()])
-            ->assertSeeInOrder(['ARR', (string) $expected->where('flow', 'ARR')->count(), 'DEP', (string) $expected->where('flow', 'DEP')->count()])
-            ->assertSeeInOrder(['Open quality flags', (string) DB::table('quality_flags')->where('state', 'open')->count()])
-            ->assertSeeInOrder(['Polls, last 24 h', '1', 'ok', '1']);
+            ->assertSeeInOrder(["Today's flights", (string) $expected->count(), 'Total flights'], false)
+            ->assertSeeInOrder([(string) $expected->where('flow', 'ARR')->count(), 'Arrivals (ARR)', (string) $expected->where('flow', 'DEP')->count(), 'Departures (DEP)'])
+            ->assertSeeInOrder([(string) DB::table('quality_flags')->where('state', 'open')->count(), 'Open quality flags'])
+            ->assertSeeInOrder(['Polls, last 24 h', '1', '(expected 288)'])
+            ->assertSeeInOrder(['Successful (1)', 'Failed (0)', 'Paused (0)']);
     }
 
     public function test_the_stale_banner_appears_on_every_screen_after_15_minutes(): void

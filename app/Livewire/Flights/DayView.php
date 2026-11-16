@@ -6,19 +6,25 @@ use App\Flights\FlightQuery;
 use App\Flights\Window;
 use App\Livewire\AdminPage;
 use Carbon\CarbonImmutable;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 use InvalidArgumentException;
 use Livewire\Attributes\Title;
 use Livewire\Attributes\Url;
+use Livewire\WithPagination;
 
 /**
  * Flights of a Kigali day: the API's list (in feed, not same-as) unless "all"
- * is ticked. Refreshes every 60 s.
+ * is ticked. Refreshes every 60 s. Shown 50 rows a page (25 / 50 / 100).
  */
 #[Title('Flights')]
 class DayView extends AdminPage
 {
+    use WithPagination;
+
+    public const PER_PAGE = [25, 50, 100];
+
     #[Url]
     public string $day = '';
 
@@ -40,9 +46,19 @@ class DayView extends AdminPage
     #[Url]
     public bool $all = false;
 
+    #[Url]
+    public int $perPage = 50;
+
     protected function ability(): string
     {
         return 'view-hub';
+    }
+
+    public function updating(string $property): void
+    {
+        if ($property !== 'paginators') {
+            $this->resetPage();
+        }
     }
 
     private function window(): Window
@@ -79,12 +95,14 @@ class DayView extends AdminPage
             ->map(fn ($f) => (object) [
                 'aodb_id' => $f->aodb_id,
                 'flight' => $f->full_flight_number ?? '—',
+                'airline' => $f->airline_iata ?? $f->airline_icao,
                 'flow' => $f->flow,
                 'other' => $f->flow === 'ARR' ? $f->adep_iata : $f->ades_iata,
                 'scheduled' => $f->flow === 'ARR' ? $f->sibt : $f->sobt,
                 'estimate' => $f->flow === 'ARR' ? ($f->eibt ?? $f->eldt) : ($f->eobt ?? $f->tobt ?? $f->etot),
                 'actual' => $f->flow === 'ARR' ? $f->aibt : $f->aobt,
                 'status' => $f->status,
+                'milestone' => $f->milestone,
                 'stand' => $f->pkg,
                 'reg' => $f->reg,
                 'type' => $f->ac_type_icao ?? $f->ac_type_iata,
@@ -93,9 +111,13 @@ class DayView extends AdminPage
             ])
             ->values();
 
+        $perPage = in_array($this->perPage, self::PER_PAGE, true) ? $this->perPage : 50;
+        $page = min(max(1, $this->getPage()), max(1, (int) ceil($rows->count() / $perPage)));
+
         return view('livewire.flights.day-view', [
             'window' => $window,
-            'rows' => $rows,
+            'rows' => new LengthAwarePaginator($rows->forPage($page, $perPage)->values(), $rows->count(), $perPage, $page, ['pageName' => 'page']),
+            'perPageOptions' => self::PER_PAGE,
             'statuses' => $statuses,
             'airlines' => $airlines,
         ]);

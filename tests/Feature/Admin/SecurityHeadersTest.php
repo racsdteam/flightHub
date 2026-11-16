@@ -88,10 +88,13 @@ class SecurityHeadersTest extends PollTestCase
     {
         $css = (string) file_get_contents(public_path('css/hub.css'));
         $this->assertNoOutsideUrl($css);
-        foreach (['ibm-plex-sans-400', 'ibm-plex-sans-500', 'ibm-plex-sans-600', 'ibm-plex-mono-400', 'ibm-plex-mono-500'] as $font) {
+        foreach (['ibm-plex-mono-400', 'ibm-plex-mono-500'] as $font) {
             $this->assertStringContainsString("url('../fonts/{$font}.woff2')", $css);
             $this->assertSame('wOF2', substr((string) file_get_contents(public_path("fonts/{$font}.woff2")), 0, 4));
         }
+        // D-052: text uses the system UI font; IBM Plex Sans is removed.
+        $this->assertStringNotContainsString('IBM Plex Sans', $css);
+        $this->assertSame([], glob(public_path('fonts/ibm-plex-sans-*')));
         $this->assertStringContainsString('SIL Open Font License', (string) file_get_contents(public_path('fonts/OFL.txt')));
         $this->assertStringContainsString('href="'.asset('css/hub.css').'"', $this->get('/login')->getContent());
     }

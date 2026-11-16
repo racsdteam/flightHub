@@ -2,9 +2,11 @@
 
 namespace App\Livewire\Quality;
 
+use App\Admin\FlagCounts;
 use App\Flights\Window;
 use App\Livewire\AdminPage;
 use App\Quality\FlagResolver;
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
@@ -16,7 +18,7 @@ use Livewire\WithPagination;
 /**
  * Quality flags: filters (state, resolution, rule, Kigali day, flight) and counts per rule.
  */
-#[Title('Quality flags')]
+#[Title('Data quality')]
 class FlagList extends AdminPage
 {
     use WithPagination;
@@ -80,7 +82,15 @@ class FlagList extends AdminPage
 
     public function render(): View
     {
+        $now = CarbonImmutable::now('UTC');
+        $openNow = DB::table('quality_flags')->where('state', 'open')->count();
+
         return view('livewire.quality.flag-list', [
+            // Display only: totals and 24-hour trends from first_detected_at / cleared_at.
+            'openNow' => $openNow,
+            'openTrend' => $openNow - FlagCounts::openAt($now->subDay()),
+            'clearedDay' => FlagCounts::clearedBetween($now->subDay(), $now),
+            'clearedPrev' => FlagCounts::clearedBetween($now->subDays(2), $now->subDay()),
             'counts' => $this->filtered(false)->selectRaw('q.rule, COUNT(*) AS n')->groupBy('q.rule')->orderBy('q.rule')->pluck('n', 'rule')->all(),
             'rules' => DB::table('quality_flags')->distinct()->orderBy('rule')->pluck('rule')->all(),
             'resolutions' => FlagResolver::RESOLUTIONS,

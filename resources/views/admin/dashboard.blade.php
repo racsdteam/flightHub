@@ -1,6 +1,6 @@
-<x-layouts.app title="Feed health">
+<x-layouts.app title="Dashboard">
     @if (session('status'))
-        <p class="notice" role="status">{{ session('status') }}</p>
+        <div class="banner banner-ok" role="status"><x-icon name="check-circle" size="20" /><p>{{ session('status') }}</p></div>
     @endif
     <livewire:feed-health />
 </x-layouts.app>

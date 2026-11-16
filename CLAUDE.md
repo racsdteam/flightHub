@@ -182,8 +182,8 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   keys, session ids.
 - CSP: default-src 'none'; scripts and styles only from the hub or with the per-request
   nonce; no 'unsafe-eval', no 'unsafe-inline' (Livewire's CSP-safe build). No inline style
-  attributes or event handlers in templates; the own scripts are public/js/hub.js (copy
-  buttons) and public/js/api-docs.js (starts Swagger UI on /api/docs).
+  attributes or event handlers in templates; the own scripts are public/js/hub.js (copy,
+  .txt download, dialog focus / Escape) and public/js/api-docs.js (starts Swagger UI on /api/docs).
 - Screen map (each route carries its ability; every Livewire screen re-checks it on every
   request, App\Livewire\AdminPage::boot):
   Feed health /, Flights /flights and /flights/{aodbId}, Quality /quality and
@@ -203,6 +203,20 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
 - composer audit clean whenever dependencies change.
 - Preflight warns when the TLS certificate expires within 14 days.
 
-## UI (later batches)
-Internal only. Blade + Livewire, no JavaScript build step. KIA PULSE look: dark theme,
-IBM Plex Sans / Mono.
+## UI
+Internal only. Blade + Livewire, no JavaScript build step. The hub's own visual identity from
+the design mockups of 2026-11-16 (D-052; docs/screens/design/, docs/DESIGN-ui.md): light theme.
+- Look only in UI batches: views, layouts, CSS, icons, display-only view data. Read-only displays
+  and filters over stored data on existing screens are allowed; no new pages, writes, fields,
+  permissions or features.
+- One hand-written stylesheet, public/css/hub.css, design tokens as custom properties at its top
+  (colours changed for contrast are marked "AA:"). No Node, framework, CDN or outside URL; own
+  scripts only public/js/hub.js and public/js/api-docs.js.
+- CSP unchanged: no inline styles or style attributes, no inline scripts or handlers. Charts are
+  server-rendered SVG (sizes as attributes) or <meter>/<progress>. tests/Feature/Admin/ViewsCspTest
+  checks every view.
+- Text uses the system UI font; codes, times and ids IBM Plex Mono (public/fonts, OFL).
+- No logos: airline codes as badges; the product mark is the text "RAC Flight Data Hub".
+- WCAG AA for every text/background pair; status never by colour alone (icon + word); visible
+  2 px focus ring; prefers-reduced-motion respected.
+- Desktop first (1366–1920 px, usable at 1280 px). Real data only, never mockup text or numbers.

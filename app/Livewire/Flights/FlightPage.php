@@ -58,7 +58,7 @@ class FlightPage extends AdminPage
         $unserved = array_filter(CanonicalJson::leaves($record), fn ($path) => ! $all->allows($path), ARRAY_FILTER_USE_KEY);
 
         $related = DB::table('flights')->whereIn('id', array_filter([$flight->same_as_flight_id, $flight->rotation_next_flight_id, $flight->rotation_prev_flight_id]))
-            ->get(['id', 'aodb_id', 'full_flight_number', 'flow', 'reference_time'])->keyBy('id');
+            ->get(['id', 'aodb_id', 'full_flight_number', 'flow', 'reference_time', 'adep_iata', 'ades_iata', 'status', 'milestone', 'in_feed'])->keyBy('id');
         $sameAsThis = DB::table('flights')->where('same_as_flight_id', $flight->id)->get(['aodb_id', 'full_flight_number', 'flow']);
 
         $flags = DB::table('quality_flags as q')->leftJoin('flights as r', 'r.id', '=', 'q.related_flight_id')
@@ -66,10 +66,14 @@ class FlightPage extends AdminPage
             ->get(['q.*', 'r.aodb_id as related_aodb_id', 'r.full_flight_number as related_flight']);
         $flagEvents = DB::table('quality_flag_events')->whereIn('flag_id', $flags->pluck('id')->all())->orderBy('id')->get()->groupBy('flag_id');
 
+        $corrections = $presented['hub']->corrections;
+
         return view('livewire.flights.flight-page', [
             'flight' => $flight,
             'groups' => $groups,
-            'corrections' => $presented['hub']->corrections,
+            'corrections' => $corrections,
+            // Display only: corrected paths, for the "Corrected" badges beside served values.
+            'corrected' => collect($corrections)->keyBy('field')->all(),
             'unserved' => $unserved,
             'documented' => fn (string $path) => AodbSpec::isDocumented($path),
             'related' => $related,

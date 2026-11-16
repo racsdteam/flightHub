@@ -99,6 +99,9 @@ class FlagPage extends AdminPage
             'events' => DB::table('quality_flag_events')->where('flag_id', $flag->id)->orderByDesc('id')->get(),
             'isDuplicate' => $flag->rule === FlightRules::DUPLICATE_SUSPECTED && $related !== null,
             'canAct' => Gate::allows('manage-quality'),
+            // Display only: open flags of the two flights shown in the "same as" confirmation.
+            'openCounts' => DB::table('quality_flags')->where('state', 'open')->whereIn('flight_id', array_filter([$flight->id, $related?->id]))
+                ->selectRaw('flight_id, COUNT(*) AS n')->groupBy('flight_id')->pluck('n', 'flight_id')->all(),
         ]);
     }
 }

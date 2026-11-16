@@ -35,7 +35,7 @@ class ApiDocsPageTest extends TestCase
         $this->assertDoesNotMatchRegularExpression('#(https?:)?//#', $html, 'no absolute or protocol-relative URL');
         preg_match_all('/<script\b[^>]*>/', $html, $scripts);
         preg_match_all('/<(?:link|script)\b[^>]*(?:href|src)="([^"]+)"/', $html, $assets);
-        $this->assertSame(['/vendor/swagger-ui/swagger-ui.css', '/vendor/swagger-ui/swagger-ui-bundle.js', '/js/api-docs.js'], $assets[1]);
+        $this->assertSame(['/css/hub.css', '/vendor/swagger-ui/swagger-ui.css', '/vendor/swagger-ui/swagger-ui-bundle.js', '/js/api-docs.js'], $assets[1]);
         foreach ($assets[1] as $asset) {
             $this->assertFileExists(public_path(ltrim($asset, '/')));
         }
