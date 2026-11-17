@@ -26,6 +26,20 @@ class LogoAndIconsTest extends PollTestCase
         $this->assertFileDoesNotExist(public_path('rac.png'));
     }
 
+    /**
+     * Batch 10b: /favicon.ico (served as a static file, for responses that declare no icon) is
+     * the RAC icon made with sips from images/favicon-32.png, no longer Laravel's empty file.
+     */
+    public function test_favicon_ico_is_the_rac_icon(): void
+    {
+        $ico = (string) file_get_contents(public_path('favicon.ico'));
+        $this->assertNotSame('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', hash('sha256', $ico), 'not the empty skeleton file');
+        $this->assertSame("\x00\x00\x01\x00\x01\x00", substr($ico, 0, 6), 'an ICO file with one image');
+        $this->assertSame([32, 32], [ord($ico[6]), ord($ico[7])], '32 x 32');
+        $this->assertSame(32, unpack('v', substr($ico, 12, 2))[1], '32 bits per pixel (with alpha)');
+        $this->assertSame('71b9510c6cb17bb05661fefb230e12dc87f310b4a85e742f5ca4bbe400369d09', hash('sha256', $ico));
+    }
+
     public function test_every_layout_references_the_logo_and_the_icons(): void
     {
         foreach (self::LAYOUTS as $layout) {

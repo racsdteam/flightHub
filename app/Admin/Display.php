@@ -148,7 +148,7 @@ final class Display
         // identity
         'id' => 'AODB id', 'flow' => 'Direction', 'flightNumber' => 'Flight number', 'fullFlightNumber' => 'Flight',
         'airlineIata' => 'Airline (IATA)', 'airlineIcao' => 'Airline (ICAO)', 'status' => 'Status', 'milestone' => 'Milestone',
-        'callsign' => 'ATC callsign', 'hub.referenceTime' => 'Reference time', 'hub.inFeed' => 'In the feed', 'hub.sameAs' => 'Same as (kept flight)',
+        'callsign' => 'ATC callsign', 'hub.referenceTime' => 'Reference time', 'hub.updatedAt' => 'Last changed', 'hub.inFeed' => 'In the feed', 'hub.sameAs' => 'Same as (kept flight)',
         // route
         'adepIata' => 'From (IATA)', 'adepIcao' => 'From (ICAO)', 'adesIata' => 'To (IATA)', 'adesIcao' => 'To (ICAO)',
         'adepDetails' => 'Departure airport', 'adepDetails.adepName' => 'Name', 'adepDetails.firstAdepIata' => 'First departure (IATA)', 'adepDetails.firstAdepIcao' => 'First departure (ICAO)',

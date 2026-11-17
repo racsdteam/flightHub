@@ -62,7 +62,7 @@ class PublicApiDocumentTest extends PollTestCase
         $this->assertSame(['200', '401', '404', '422', '429'], array_map('strval', array_keys($paths['/flights/{id}']['get']['responses'])));
         $this->assertSame(['day', 'from', 'to', 'flow', 'id', 'history'], array_keys(PublicOpenApi::tree()['components']['parameters']));
         $this->assertArrayNotHasKey('servers', PublicOpenApi::tree(), 'the server is added when served');
-        $this->assertSame(['referenceTime', 'inFeed', 'sameAs', 'rotationNext', 'rotationPrev', 'rotationSource', 'minTurnaroundMinutes'],
+        $this->assertSame(['referenceTime', 'updatedAt', 'inFeed', 'sameAs', 'rotationNext', 'rotationPrev', 'rotationSource', 'minTurnaroundMinutes'],
             array_keys(PublicOpenApi::tree()['components']['schemas']['Hub']['properties']));
         $this->assertSame(['cursor', 'observedAt', 'kind', 'field', 'old', 'new', 'source'],
             array_keys(PublicOpenApi::tree()['components']['schemas']['HistoryEvent']['properties']));
@@ -78,8 +78,27 @@ class PublicApiDocumentTest extends PollTestCase
                 continue;
             }
             $this->assertNotSame('', $schema['description'] ?? '', $field);
-            $this->assertLessThanOrEqual(10, str_word_count($schema['description']), "{$field}: one short line");
+            $this->assertLessThanOrEqual(10, self::words($schema['description']), "{$field}: one short line");
         }
+    }
+
+    /**
+     * Words of a description line, not counting listed values: UPPER_CASE codes (SCHEDULED,
+     * IN_FLIGHT, PAX…) and field names in backticks.
+     */
+    private static function words(string $line): int
+    {
+        $line = (string) preg_replace('/`[^`]*`/', ' ', $line);
+        $tokens = array_filter(preg_split('/\s+/', trim($line)), fn ($t) => preg_match('/[A-Za-z0-9]/', $t) === 1);
+
+        return count(array_filter($tokens, fn ($t) => preg_match('/^\(?[A-Z][A-Z0-9_]+\)?[.,;:]?$/', $t) !== 1));
+    }
+
+    public function test_the_word_count_skips_listed_values_only(): void
+    {
+        $this->assertSame(3, self::words('Progress step. Arrivals: SCHEDULED, AIRBORNE, FIR_ENTRY, IN_BLOCK.'));
+        $this->assertSame(5, self::words('`divertedAdesIata` = airport landed at; `filedAdesIata` = planned destination.'));
+        $this->assertSame(7, self::words('Aircraft registration (tail), e.g. 9XRWT — no hyphen.'));
     }
 
     public function test_it_is_short_plain_and_has_no_internal_words(): void
@@ -136,8 +155,10 @@ class PublicApiDocumentTest extends PollTestCase
         $groups = array_values(array_diff(array_keys(config('api_fields.groups')), ['quality']));
         $every = $this->consumerKey($groups, 5000);
         $identity = $this->consumerKey([], 5000);
+        // The key of the WB464 examples (Batch 10b): route, schedule, times, aircraft, resources, rotation.
+        $example = $this->consumerKey(['route', 'schedule', 'times', 'aircraft', 'resources', 'rotation'], 5000);
 
-        foreach ([$every, $identity] as $key) {
+        foreach ([$every, $identity, $example] as $key) {
             foreach (['day=2026-10-29', 'day=2026-10-29&flow=DEP', 'from=2026-10-29T05:00:00Z&to=2026-10-30T05:00:00Z'] as $query) {
                 PublicOpenApi::assertResponse($this->api('flights?'.$query, $key)->assertOk(), '/flights');
             }

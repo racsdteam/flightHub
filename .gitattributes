@@ -18,3 +18,4 @@ CHANGELOG.md export-ignore
 
 # The RAC logo (supplied by RAC, D-053) and the files derived from it, byte-for-byte.
 /public/images/* -text
+/public/favicon.ico -text

@@ -60,7 +60,7 @@ class ApiScopesTest extends PollTestCase
         $this->assertCount(51, $response->json('data'));
         foreach ($response->json('data') as $flight) {
             $this->assertSame(self::IDENTITY_ROUTE, array_keys($flight));
-            $this->assertSame(['referenceTime', 'inFeed', 'sameAs'], array_keys($flight['hub']));
+            $this->assertSame(['referenceTime', 'updatedAt', 'inFeed', 'sameAs'], array_keys($flight['hub']));
         }
         $this->assertNoOutsideField($response->getContent());
     }
@@ -78,7 +78,7 @@ class ApiScopesTest extends PollTestCase
         $firstSeen = $one->json('history.0.new');
         $this->assertSame(self::IDENTITY_ROUTE, array_keys($firstSeen));
         $this->assertSame('IN_FLIGHT', $firstSeen['status']);
-        $this->assertSame(['referenceTime', 'inFeed', 'sameAs'], array_keys($firstSeen['hub']));
+        $this->assertSame(['referenceTime', 'updatedAt', 'inFeed', 'sameAs'], array_keys($firstSeen['hub']));
         $this->assertNoOutsideField($one->getContent());
 
         $changes = $this->api('changes?cursor=0&limit=1000', $key)->assertOk();

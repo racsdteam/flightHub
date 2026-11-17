@@ -207,7 +207,7 @@ class OpenApiDocumentTest extends TestCase
         $flight = fn (array $changes = []) => json_decode(json_encode($changes + [
             'id' => 'x', 'flow' => 'ARR', 'flightNumber' => '470', 'fullFlightNumber' => 'KQ470', 'airlineIata' => 'KQ',
             'airlineIcao' => 'KQA', 'status' => 'SCHEDULED', 'milestone' => null, 'callsign' => null,
-            'hub' => ['referenceTime' => '2026-10-29T06:00:00Z', 'inFeed' => true, 'sameAs' => null],
+            'hub' => ['referenceTime' => '2026-10-29T06:00:00Z', 'updatedAt' => '2026-10-29T07:42:30Z', 'inFeed' => true, 'sameAs' => null],
         ]));
         $schema = OpenApi::pointer('components', 'schemas', 'Flight');
 

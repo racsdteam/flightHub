@@ -26,6 +26,9 @@ final class FlightPresenter
     /** @var array<int, list<array{rule: string, field: ?string, since: string}>> */
     private array $quality = [];
 
+    /** @var array<int, string> flights.id → valid_from of the current version */
+    private array $updatedAt = [];
+
     /** @var array<string, string> "table:id" → natural key */
     private array $references = [];
 
@@ -62,6 +65,18 @@ final class FlightPresenter
             }
             foreach (DB::table('aircraft_types')->get(['id', 'airline_iata', 'ac_type_iata']) as $row) {
                 $presenter->references['aircraft_types:'.$row->id] = "aircraft_types:{$row->airline_iata}/{$row->ac_type_iata}";
+            }
+        }
+
+        // hub.updatedAt: when the hub observed the version served. A version row (as_of, events)
+        // carries its own valid_from; for a flights row, that of its current version.
+        if ($fields->allows('hub.updatedAt')) {
+            $current = $rows->filter(fn ($r) => ! property_exists($r, 'valid_from'))->map(fn ($r) => (int) $r->id)->all();
+            if ($current !== []) {
+                $presenter->updatedAt = DB::table('flight_versions as v')
+                    ->join('flights as f', fn ($join) => $join->on('f.id', '=', 'v.flight_id')->on('f.current_version_no', '=', 'v.version_no'))
+                    ->whereIn('f.id', $current)
+                    ->pluck('v.valid_from', 'v.flight_id')->all();
             }
         }
 
@@ -105,6 +120,7 @@ final class FlightPresenter
         foreach ($this->fields->hubFields() as $field) {
             $hub[$field] = match ($field) {
                 'referenceTime' => self::iso($row->reference_time),
+                'updatedAt' => self::iso(property_exists($row, 'valid_from') ? $row->valid_from : ($this->updatedAt[(int) $row->id] ?? null)),
                 'inFeed' => (bool) $row->in_feed,
                 'sameAs' => $this->aodbId($row->same_as_flight_id),
                 'rotationNext' => $this->aodbId($row->rotation_next_flight_id),

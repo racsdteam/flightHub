@@ -189,6 +189,7 @@ paths:
                         callsign: null
                         hub:
                           referenceTime: '2026-10-29T00:40:00Z'
+                          updatedAt: '2026-10-29T07:42:30Z'
                           inFeed: true
                           sameAs: null
                       - id: d9d80049-0478-4abe-bf7a-8fcd3608b802
@@ -202,6 +203,7 @@ paths:
                         callsign: null
                         hub:
                           referenceTime: '2026-10-29T00:45:00Z'
+                          updatedAt: '2026-10-29T07:42:30Z'
                           inFeed: true
                           sameAs: null
                     meta:
@@ -235,6 +237,7 @@ paths:
                         routeIcao: null
                         hub:
                           referenceTime: '2026-10-29T06:00:00Z'
+                          updatedAt: '2026-10-29T07:42:30Z'
                           inFeed: true
                           sameAs: null
                           quality:
@@ -353,6 +356,7 @@ paths:
                         linkedId: null
                         hub:
                           referenceTime: '2026-10-29T06:00:00Z'
+                          updatedAt: '2026-10-29T07:42:30Z'
                           inFeed: true
                           sameAs: null
                           minTurnaroundMinutes: null
@@ -451,6 +455,7 @@ paths:
                       routeIcao: null
                       hub:
                         referenceTime: '2026-10-29T06:00:00Z'
+                        updatedAt: '2026-10-29T07:42:30Z'
                         inFeed: true
                         sameAs: null
                         quality:
@@ -500,6 +505,7 @@ paths:
                           routeIcao: null
                           hub:
                             referenceTime: '2026-10-29T06:00:00Z'
+                            updatedAt: '2026-10-29T07:42:30Z'
                             inFeed: true
                             sameAs: null
                             quality: {  }
@@ -547,6 +553,7 @@ paths:
                       callsign: null
                       hub:
                         referenceTime: '2026-10-29T06:00:00Z'
+                        updatedAt: '2026-10-29T07:42:30Z'
                         inFeed: true
                         sameAs: null
                     meta:
@@ -619,6 +626,7 @@ paths:
                           callsign: null
                           hub:
                             referenceTime: '2026-10-29T00:45:00Z'
+                            updatedAt: '2026-10-29T07:42:30Z'
                             inFeed: true
                             sameAs: null
                         source: aodb
@@ -640,6 +648,7 @@ paths:
                           callsign: null
                           hub:
                             referenceTime: '2026-10-29T01:20:00Z'
+                            updatedAt: '2026-10-29T07:42:30Z'
                             inFeed: true
                             sameAs: null
                         source: aodb
@@ -661,6 +670,7 @@ paths:
                           callsign: null
                           hub:
                             referenceTime: '2026-10-29T05:09:00Z'
+                            updatedAt: '2026-10-29T07:42:30Z'
                             inFeed: true
                             sameAs: null
                         source: aodb
@@ -682,6 +692,7 @@ paths:
                           callsign: null
                           hub:
                             referenceTime: '2026-10-29T04:10:00Z'
+                            updatedAt: '2026-10-29T07:42:30Z'
                             inFeed: true
                             sameAs: null
                         source: aodb
@@ -1272,11 +1283,16 @@ components:
     Hub:
       type: object
       description: What the hub adds to a flight. Its fields follow the consumer's groups like the others.
-      required: [referenceTime, inFeed, sameAs]
+      required: [referenceTime, updatedAt, inFeed, sameAs]
       additionalProperties: false
       properties:
         referenceTime:
           description: 'The time that places the flight in a window: scheduled, else estimated, else actual (arrivals: sibt, eibt, eldt, aibt, aldt; departures: sobt, eobt, tobt, etot, aobt, atot). null when the flight has none of them.'
+          type: [string, 'null']
+          format: date-time
+          x-field-group: identity
+        updatedAt:
+          description: When this flight last changed (within the 5-minute refresh).
           type: [string, 'null']
           format: date-time
           x-field-group: identity

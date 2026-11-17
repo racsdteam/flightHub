@@ -29,22 +29,32 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/FlightList'}
               examples:
-                arrivals:
-                  summary: One flight of the list
+                wb464:
+                  summary: 'WB464 from Nairobi, one flight of the list (some fields)'
                   value:
                     data:
-                      - id: 0d5a9f54-8760-46e3-8f73-56f33647bd29
-                        flow: ARR
-                        flightNumber: '807'
-                        fullFlightNumber: ET807
-                        airlineIata: ET
-                        airlineIcao: ETH
-                        status: SCHEDULED
+                      - id: 'dac72e43-b4cb-4d09-9aa5-e0398fa5a6b8'
+                        flow: 'ARR'
+                        flightNumber: '464'
+                        fullFlightNumber: 'WB464'
+                        airlineIata: 'WB'
+                        airlineIcao: 'RWD'
+                        status: 'TERMINATED'
                         milestone: null
                         callsign: null
-                        sobt: null
-                        sibt: '2026-10-29T07:40:00Z'
-                        hub: {referenceTime: '2026-10-29T07:40:00Z', inFeed: true, sameAs: null}
+                        adepIata: 'NBO'
+                        adesIata: 'KGL'
+                        sibt: '2026-10-29T04:10:00Z'
+                        eldt: '2026-10-29T04:20:00Z'
+                        aldt: '2026-10-29T04:13:00Z'
+                        eibt: '2026-10-29T04:17:00Z'
+                        aibt: '2026-10-29T04:19:00Z'
+                        pkg: null
+                        reg: '9XRWT'
+                        acTypeIata: '738'
+                        acTypeIcao: 'B738'
+                        paxCapa: 154
+                        hub: {referenceTime: '2026-10-29T04:10:00Z', updatedAt: '2026-10-29T07:42:30Z', inFeed: true, sameAs: null, rotationNext: 'd7e33768-bfbc-4403-9814-dc153b601843'}
                     meta:
                       asOf: '2026-10-29T07:42:30Z'
                       feed: ok
@@ -67,22 +77,69 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/FlightOne'}
               examples:
-                flight:
-                  summary: A flight
+                wb464:
+                  summary: 'WB464 with history=1 (some fields)'
                   value:
                     data:
-                      id: 0d5a9f54-8760-46e3-8f73-56f33647bd29
-                      flow: ARR
-                      flightNumber: '807'
-                      fullFlightNumber: ET807
-                      airlineIata: ET
-                      airlineIcao: ETH
-                      status: SCHEDULED
+                      id: 'dac72e43-b4cb-4d09-9aa5-e0398fa5a6b8'
+                      flow: 'ARR'
+                      flightNumber: '464'
+                      fullFlightNumber: 'WB464'
+                      airlineIata: 'WB'
+                      airlineIcao: 'RWD'
+                      status: 'TERMINATED'
                       milestone: null
                       callsign: null
-                      sobt: null
-                      sibt: '2026-10-29T07:40:00Z'
-                      hub: {referenceTime: '2026-10-29T07:40:00Z', inFeed: true, sameAs: null}
+                      adepIata: 'NBO'
+                      adesIata: 'KGL'
+                      sibt: '2026-10-29T04:10:00Z'
+                      eldt: '2026-10-29T04:20:00Z'
+                      aldt: '2026-10-29T04:13:00Z'
+                      eibt: '2026-10-29T04:17:00Z'
+                      aibt: '2026-10-29T04:19:00Z'
+                      pkg: null
+                      reg: '9XRWT'
+                      acTypeIata: '738'
+                      acTypeIcao: 'B738'
+                      paxCapa: 154
+                      hub: {referenceTime: '2026-10-29T04:10:00Z', updatedAt: '2026-10-29T07:42:30Z', inFeed: true, sameAs: null, rotationNext: 'd7e33768-bfbc-4403-9814-dc153b601843'}
+                    history:
+                      - cursor: 5
+                        observedAt: '2026-10-29T07:42:30Z'
+                        kind: 'first_seen'
+                        field: null
+                        old: null
+                        new:
+                          id: 'dac72e43-b4cb-4d09-9aa5-e0398fa5a6b8'
+                          flow: 'ARR'
+                          flightNumber: '464'
+                          fullFlightNumber: 'WB464'
+                          airlineIata: 'WB'
+                          airlineIcao: 'RWD'
+                          status: 'TERMINATED'
+                          milestone: null
+                          callsign: null
+                          adepIata: 'NBO'
+                          adesIata: 'KGL'
+                          sibt: '2026-10-29T04:10:00Z'
+                          eldt: '2026-10-29T04:20:00Z'
+                          aldt: '2026-10-29T04:13:00Z'
+                          eibt: '2026-10-29T04:17:00Z'
+                          aibt: '2026-10-29T04:19:00Z'
+                          pkg: null
+                          reg: '9XRWT'
+                          acTypeIata: '738'
+                          acTypeIcao: 'B738'
+                          paxCapa: 154
+                          hub: {referenceTime: '2026-10-29T04:10:00Z', updatedAt: '2026-10-29T07:42:30Z', inFeed: true, sameAs: null, rotationNext: 'd7e33768-bfbc-4403-9814-dc153b601843'}
+                        source: aodb
+                      - cursor: 6
+                        observedAt: '2026-10-29T07:42:30Z'
+                        kind: 'field_changed'
+                        field: 'hub.rotationNext'
+                        old: null
+                        new: 'd7e33768-bfbc-4403-9814-dc153b601843'
+                        source: system
                     meta: {asOf: '2026-10-29T07:42:30Z', feed: ok}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
@@ -161,13 +218,14 @@ components:
     Hub:
       type: object
       description: Fields added by the hub.
-      required: [referenceTime, inFeed, sameAs]
+      required: [referenceTime, updatedAt, inFeed, sameAs]
       properties:
         referenceTime: {type: ['string', 'null'], format: date-time, description: 'The time that places the flight in a day.'}
+        updatedAt: {type: ['string', 'null'], format: date-time, description: When this flight last changed (within the 5-minute refresh).}
         inFeed: {type: boolean, description: false once the airport no longer lists the flight.}
         sameAs: {type: ['string', 'null'], description: Id of the flight this one duplicates.}
-        rotationNext: {type: ['string', 'null'], description: 'Arrivals: id of the same aircraft''s next departure.'}
-        rotationPrev: {type: ['string', 'null'], description: 'Departures: id of the same aircraft''s previous arrival.'}
+        rotationNext: {type: ['string', 'null'], description: Next departure of the same aircraft (by registration).}
+        rotationPrev: {type: ['string', 'null'], description: Previous arrival of the same aircraft (by registration).}
         rotationSource: {type: ['string', 'null'], enum: [aodb, registration, null], description: How that link was made.}
         minTurnaroundMinutes: {type: ['integer', 'null'], description: Minimum turnaround time of the aircraft type.}
     Flight:
@@ -181,29 +239,29 @@ components:
         fullFlightNumber: {type: ['string', 'null'], description: 'Airline code and number, e.g. ET807.'}
         airlineIata: {type: ['string', 'null'], description: Airline IATA code.}
         airlineIcao: {type: ['string', 'null'], description: Airline ICAO code.}
-        status: {type: ['string', 'null'], description: 'SCHEDULED, IN_FLIGHT, TERMINATED, CANCELLED, SUSPENDED or NONE.'}
-        milestone: {type: ['string', 'null'], description: 'Progress step, e.g. LANDED or OFF_BLOCK.'}
+        status: {type: ['string', 'null'], description: 'SCHEDULED, IN_FLIGHT, TERMINATED, CANCELLED, SUSPENDED or NONE. A diverted flight keeps its status; see `divertedDetails`.'}
+        milestone: {type: ['string', 'null'], description: 'Progress step. Arrivals: SCHEDULED, AIRBORNE, FIR_ENTRY, FINAL, LANDED, IN_BLOCK. Departures: SCHEDULED, NO_IN_BLOCK, ON_BLOCK, START_BOARDING, AC_READY, OK_START, OFF_BLOCK, TAKE_OFF.'}
         callsign: {type: ['string', 'null'], description: ATC callsign.}
-        adepIata: {type: ['string', 'null'], description: Departure airport IATA code.}
-        adepIcao: {type: ['string', 'null'], description: Departure airport ICAO code.}
-        adesIata: {type: ['string', 'null'], description: Destination airport IATA code.}
-        adesIcao: {type: ['string', 'null'], description: Destination airport ICAO code.}
+        adepIata: {type: ['string', 'null'], description: 'Origin airport, IATA.'}
+        adepIcao: {type: ['string', 'null'], description: 'Origin airport, ICAO.'}
+        adesIata: {type: ['string', 'null'], description: 'Destination airport, IATA.'}
+        adesIcao: {type: ['string', 'null'], description: 'Destination airport, ICAO.'}
         adepDetails: {type: ['object', 'null'], description: 'Departure airport name and first departure, if stopover.'}
         adesDetails: {type: ['object', 'null'], description: 'Destination airport name and final arrival, if stopover.'}
-        divertedDetails: {type: ['object', 'null'], description: Filed and actual destination of a diverted flight.}
-        codeShare: {type: ['object', 'null'], description: Operating airline and code-share flight numbers.}
+        divertedDetails: {type: ['object', 'null'], description: '`divertedAdesIata` = airport landed at; `filedAdesIata` = planned destination.'}
+        codeShare: {type: ['object', 'null'], description: 'Codeshare: operating airline (`operatingAirlineIata`) and flight numbers.'}
         routeIcao: {type: ['string', 'null'], description: ICAO route.}
         sobt: {type: ['string', 'null'], format: date-time, description: Scheduled off-block time (departures).}
         sibt: {type: ['string', 'null'], format: date-time, description: Scheduled in-block time (arrivals).}
-        eobt: {type: ['string', 'null'], format: date-time, description: Estimated off-block time.}
+        eobt: {type: ['string', 'null'], format: date-time, description: 'Estimated off-block time.'}
         etot: {type: ['string', 'null'], format: date-time, description: Estimated take-off time.}
-        aobt: {type: ['string', 'null'], format: date-time, description: Actual off-block time.}
-        atot: {type: ['string', 'null'], format: date-time, description: Actual take-off time.}
+        aobt: {type: ['string', 'null'], format: date-time, description: 'Actual off-block time.'}
+        atot: {type: ['string', 'null'], format: date-time, description: 'Actual take-off time.'}
         eldt: {type: ['string', 'null'], format: date-time, description: Estimated landing time.}
-        aldt: {type: ['string', 'null'], format: date-time, description: Actual landing time.}
-        eibt: {type: ['string', 'null'], format: date-time, description: Estimated in-block time.}
-        aibt: {type: ['string', 'null'], format: date-time, description: Actual in-block time.}
-        tobt: {type: ['string', 'null'], format: date-time, description: Target off-block time.}
+        aldt: {type: ['string', 'null'], format: date-time, description: 'Actual landing time.'}
+        eibt: {type: ['string', 'null'], format: date-time, description: 'Estimated in-block (on-block) time.'}
+        aibt: {type: ['string', 'null'], format: date-time, description: 'Actual in-block (on-block) time.'}
+        tobt: {type: ['string', 'null'], format: date-time, description: 'Target off-block time.'}
         tsat: {type: ['string', 'null'], format: date-time, description: Target start-up approval time.}
         ttot: {type: ['string', 'null'], format: date-time, description: Target take-off time.}
         ctot: {type: ['string', 'null'], format: date-time, description: Calculated take-off time (air traffic flow).}
@@ -218,13 +276,13 @@ components:
         eet: {type: ['integer', 'null'], description: Estimated flight duration in minutes.}
         vtt: {type: ['object', 'null'], description: Estimated and actual taxi time in minutes.}
         regulation: {type: ['object', 'null'], description: Air traffic flow regulation and its reason.}
-        pkg: {type: ['string', 'null'], description: Aircraft stand.}
-        gate: {type: ['string', 'null'], description: Boarding gate.}
+        pkg: {type: ['string', 'null'], description: 'Stand.'}
+        gate: {type: ['string', 'null'], description: 'Gate.'}
         gateDetails: {type: ['object', 'null'], description: Gate open and close times and status.}
-        terminal: {type: ['string', 'null'], description: Terminal.}
+        terminal: {type: ['string', 'null'], description: 'Terminal.'}
         hall: {type: ['string', 'null'], description: Hall.}
         counter: {type: ['string', 'null'], description: Check-in counters.}
-        carousel: {type: ['string', 'null'], description: Baggage belt.}
+        carousel: {type: ['string', 'null'], description: 'Baggage belt (arrivals).'}
         rwy: {type: ['string', 'null'], description: Runway.}
         sid: {type: ['string', 'null'], description: Standard instrument departure procedure.}
         bridge: {type: ['string', 'null'], description: Whether a boarding bridge is needed.}
@@ -238,9 +296,9 @@ components:
         borderControl: {type: ['string', 'null'], description: Border control point.}
         securityCheckpoint: {type: ['string', 'null'], description: Security checkpoint.}
         publicDisplayed: {type: ['boolean', 'null'], description: Whether the flight is shown on public screens.}
-        reg: {type: ['string', 'null'], description: Aircraft registration.}
-        acTypeIata: {type: ['string', 'null'], description: Aircraft type IATA code.}
-        acTypeIcao: {type: ['string', 'null'], description: Aircraft type ICAO code.}
+        reg: {type: ['string', 'null'], description: 'Aircraft registration (tail), e.g. 9XRWT — no hyphen.'}
+        acTypeIata: {type: ['string', 'null'], description: 'Aircraft type, IATA (e.g. 738).'}
+        acTypeIcao: {type: ['string', 'null'], description: 'Aircraft type, ICAO (e.g. B738).'}
         aircraftDetails: {type: ['object', 'null'], description: 'Aircraft type name, wake category, maximum take-off weight.'}
         paxCapa: {type: ['integer', 'null'], description: Passenger seats of the aircraft.}
         mtt: {type: ['integer', 'null'], description: Minimum turnaround time in minutes.}
@@ -248,12 +306,12 @@ components:
         paxDetails: {type: ['object', 'null'], description: 'Passengers by category (minors, reduced mobility, VIP).'}
         bags: {type: ['integer', 'null'], description: Total baggage weight in kg.}
         nationality: {type: ['string', 'null'], description: Nationality sector (domestic or international).}
-        trafficNature: {type: ['string', 'null'], description: 'Traffic type, e.g. passenger or cargo.'}
+        trafficNature: {type: ['string', 'null'], description: 'Service type, e.g. PAX (passenger) or cargo.'}
         dlCodes: {type: ['object', 'null'], description: 'Delay codes, each with code, minutes and information.'}
         remarks: {type: ['string', 'null'], description: Remarks on the flight.}
-        groundHandler: {type: ['string', 'null'], description: Ground handling agent.}
+        groundHandler: {type: ['string', 'null'], description: 'Ground handler.'}
         ghrAssistance: {type: ['object', 'null'], description: Ground handling services requested.}
         ghrOperatorDetails: {type: ['object', 'null'], description: Ground handling operator name and country.}
         ghrRecordInfo: {type: ['object', 'null'], description: Ground handling record status.}
-        linkedId: {type: ['string', 'null'], description: Id of a linked flight of this aircraft.}
+        linkedId: {type: ['string', 'null'], description: 'Paired arrival or departure of this aircraft, from the source.'}
         hub: {$ref: '#/components/schemas/Hub'}

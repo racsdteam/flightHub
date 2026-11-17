@@ -18,7 +18,7 @@ return [
     'groups' => [
         'identity' => [
             'id', 'flow', 'flightNumber', 'fullFlightNumber', 'airlineIata', 'airlineIcao', 'status',
-            'milestone', 'callsign', 'hub.referenceTime', 'hub.inFeed', 'hub.sameAs',
+            'milestone', 'callsign', 'hub.referenceTime', 'hub.updatedAt', 'hub.inFeed', 'hub.sameAs',
         ],
         'route' => [
             'adepIata', 'adepIcao', 'adesIata', 'adesIcao', 'adepDetails.*', 'adesDetails.*',
