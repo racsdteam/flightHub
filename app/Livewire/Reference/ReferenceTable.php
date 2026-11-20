@@ -11,8 +11,9 @@ use Illuminate\View\View;
 
 /**
  * A reference table (manage-reference): list, create, edit, deactivate /
- * reactivate — never delete. Every create and edit sets reviewed_by = the
- * user's name and reviewed_on = today (Kigali); every change is audited with
+ * reactivate — never delete. Every create, edit and reactivation sets
+ * reviewed_by = the user's name and reviewed_on = today (Kigali, D-044);
+ * deactivating does not. Every change is audited with
  * before / after values and marks "re-apply pending" (served values follow
  * within 5 minutes, outside the web request).
  */
@@ -114,13 +115,22 @@ abstract class ReferenceTable extends AdminPage
         session()->flash('status', 'Saved. Served values follow within 5 minutes (re-apply pending).');
     }
 
+    /**
+     * Deactivate or reactivate. A reactivated row is a new review: reviewed_by = the user's
+     * name, reviewed_on = today (Kigali). Deactivating keeps the last review.
+     */
     public function toggle(int $id): void
     {
         $before = $this->snapshot($id);
         abort_if($before === null, 404);
-        DB::table($this->table())->where('id', $id)->update([
+        $now = CarbonImmutable::now('UTC');
+        $review = $before['active'] ? [] : [
+            'reviewed_by' => mb_substr((string) auth()->user()->name, 0, 100),
+            'reviewed_on' => $now->setTimezone('Africa/Kigali')->format('Y-m-d'),
+        ];
+        DB::table($this->table())->where('id', $id)->update($review + [
             'active' => ! $before['active'],
-            'updated_at' => CarbonImmutable::now('UTC')->format('Y-m-d H:i:s'),
+            'updated_at' => $now->format('Y-m-d H:i:s'),
         ]);
         Audit::record($before['active'] ? 'reference.deactivated' : 'reference.reactivated', ['before' => $before, 'after' => $this->snapshot($id)], $this->table(), $id);
         ReapplyPending::mark();

@@ -181,4 +181,25 @@ class AdminAccessTest extends TestCase
         $this->get('/')->assertRedirect('/login');
         $this->assertGuest();
     }
+
+    /**
+     * UAT-06: a Livewire request answered 419 goes to the sign-in page, which says the session
+     * ended (public/js/hub.js; checked headless in the acceptance re-test).
+     */
+    public function test_a_session_that_ended_sends_livewire_to_a_sign_in_page_that_says_so(): void
+    {
+        $this->actingAs($this->user());
+        $page = $this->get('/')->assertOk()->getContent();
+        $this->assertStringContainsString('<script src="'.asset('js/hub.js').'" data-session-ended="'.e(route('login', ['session' => 'ended'])).'" defer></script>', $page);
+
+        $script = (string) file_get_contents(public_path('js/hub.js'));
+        $this->assertStringContainsString('window.Livewire.interceptRequest(', $script);
+        $this->assertStringContainsString('error.response.status === 419', $script);
+        $this->assertStringContainsString('error.preventDefault();', $script);
+
+        auth()->logout();
+        $this->get('/login?session=ended')->assertOk()->assertSee('Your session has ended. Please sign in again.');
+        $this->get('/login')->assertOk()->assertDontSee('Your session has ended');
+        $this->get('/login?session=other')->assertOk()->assertDontSee('Your session has ended');
+    }
 }

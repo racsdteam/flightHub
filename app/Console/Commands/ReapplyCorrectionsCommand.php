@@ -12,7 +12,7 @@ class ReapplyCorrectionsCommand extends Command
     protected $signature = 'hub:reapply-corrections
         {--if-pending : Run only when a reference-data change marked a re-apply as pending (scheduled)}';
 
-    protected $description = 'Re-evaluate served values against the active reference data (run after reference data changed)';
+    protected $description = 'Re-evaluate served values against the active reference data, then the quality rules (run after reference data changed)';
 
     public function handle(): int
     {
@@ -34,7 +34,10 @@ class ReapplyCorrectionsCommand extends Command
             return self::FAILURE;
         }
 
-        $this->line("hub:reapply-corrections: {$result['flights']} flights corrected, {$result['events']} correction events.");
+        $quality = $result['quality'] === null
+            ? "quality rules not run ({$result['quality_skipped']})"
+            : "quality: {$result['quality']['evaluated']} flights evaluated, {$result['quality']['detected']} flags detected, {$result['quality']['cleared']} cleared, {$result['quality']['reopened']} reopened";
+        $this->line("hub:reapply-corrections: {$result['flights']} flights corrected, {$result['events']} correction events; {$quality}.");
 
         return self::SUCCESS;
     }

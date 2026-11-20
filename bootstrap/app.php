@@ -23,9 +23,11 @@ return Application::configure(basePath: dirname(__DIR__))
         then: fn () => Route::group([], __DIR__.'/../routes/docs.php'),
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        // Every response (web, API, documentation): no X-Powered-By.
+        // Every response (web, API, documentation, the fallback 404 of an unknown URL, the
+        // maintenance page): security headers (outermost, so an exception rendered by an inner
+        // middleware gets them too) and no X-Powered-By.
+        $middleware->prepend(SecurityHeaders::class);
         $middleware->append(RemovePoweredBy::class);
-        $middleware->web(append: [SecurityHeaders::class]);
         $middleware->alias([
             'account' => EnsureAccountReady::class,
             'challenge.unlocked' => EnsureChallengeNotLocked::class,

@@ -5,8 +5,33 @@
  *  - data-download="<id>" data-filename="x.txt": saves that element's text as a .txt file.
  *  - [data-dialog]: when one appears, focus moves to its [data-autofocus]; Escape presses its
  *    [data-dialog-cancel] (the dialog's own Cancel button).
+ *  - A Livewire request answered 419 (the session ended: deactivated, idle timeout, signed out
+ *    elsewhere) goes to the sign-in page named by this script tag's data-session-ended, which
+ *    says "Your session has ended", instead of Livewire's "This page has expired" dialog.
  */
 (function () {
+    var sessionEnded = document.currentScript ? document.currentScript.getAttribute('data-session-ended') : null;
+
+    function watchSessionEnd() {
+        if (!sessionEnded || !window.Livewire || typeof window.Livewire.interceptRequest !== 'function') {
+            return;
+        }
+        window.Livewire.interceptRequest(function (hooks) {
+            hooks.onError(function (error) {
+                if (error.response && error.response.status === 419) {
+                    error.preventDefault();
+                    window.location.assign(sessionEnded);
+                }
+            });
+        });
+    }
+
+    if (window.Livewire) {
+        watchSessionEnd();
+    } else {
+        document.addEventListener('livewire:init', watchSessionEnd);
+    }
+
     function textOf(id) {
         var source = document.getElementById(id);
         if (!source) {

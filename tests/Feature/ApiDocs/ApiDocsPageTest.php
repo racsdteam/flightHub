@@ -85,7 +85,9 @@ class ApiDocsPageTest extends TestCase
         $this->assertStringStartsWith('application/yaml', (string) $response->headers->get('Content-Type'));
         $this->assertSame(ApiDocsController::served(), $response->getContent());
         $this->assertStringContainsString('openapi: 3.1.0', $response->getContent());
-        $this->assertNotNull($response->headers->get('Content-Security-Policy'));
+        // Batch 11b: the CSP is for HTML responses; the document carries the other security headers.
+        $this->assertNull($response->headers->get('Content-Security-Policy'));
+        $response->assertHeader('X-Content-Type-Options', 'nosniff')->assertHeader('X-Frame-Options', 'DENY');
 
         // The only URL is the hub's own API address; the internal document is not served.
         preg_match_all('#https?://[^\s\'"]+#', $response->getContent(), $urls);

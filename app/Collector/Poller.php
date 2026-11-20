@@ -88,7 +88,7 @@ final class Poller
         ];
 
         try {
-            $this->window = $this->window($this->startedAt);
+            $this->window = self::window($this->startedAt);
         } catch (InvalidArgumentException) {
             $this->window = Window::kigaliDay($this->startedAt->setTimezone('Africa/Kigali')->format('Y-m-d'));
 
@@ -115,9 +115,10 @@ final class Poller
     }
 
     /**
-     * Kigali yesterday 00:00 → tomorrow 24:00 by default (D-025), in UTC.
+     * Kigali yesterday 00:00 → tomorrow 24:00 by default (D-025), in UTC. Also the set the
+     * quality rules run over after hub:reapply-corrections.
      */
-    public function window(CarbonImmutable $now): Window
+    public static function window(CarbonImmutable $now): Window
     {
         $today = $now->setTimezone('Africa/Kigali')->startOfDay();
 

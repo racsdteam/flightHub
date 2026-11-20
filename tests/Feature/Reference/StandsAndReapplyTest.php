@@ -8,7 +8,8 @@ use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
 /**
- * E4 (stand_unknown) and E5 (hub:reapply-corrections).
+ * E4 (stand_unknown) and E5 (hub:reapply-corrections; since Batch 11b it also runs the
+ * quality rules, as after a poll).
  */
 class StandsAndReapplyTest extends ReferenceDataTestCase
 {
@@ -73,6 +74,64 @@ class StandsAndReapplyTest extends ReferenceDataTestCase
         $this->artisan('hub:reapply-corrections')
             ->expectsOutputToContain('8 flights corrected, 24 correction events')
             ->assertExitCode(0);
+    }
+
+    public function test_reapply_runs_the_quality_rules_so_type_missing_follows_without_a_poll(): void
+    {
+        $this->poll();
+        $open = fn () => DB::table('quality_flags')->where(['rule' => 'type_missing', 'state' => 'open'])->count();
+        $this->assertSame(11, $open());
+        $this->aircraftType('WB', 'DH8', 'DH8D', 'Dash 8-400 (TEST)', 'M');
+
+        $this->travel(2)->minutes();
+        $this->artisan('hub:reapply-corrections')
+            ->expectsOutputToContain('8 flights corrected, 24 correction events; quality:')
+            ->assertExitCode(0);
+
+        $this->assertSame(1, DB::table('polls')->count(), 'no poll ran');
+        $this->assertSame(3, $open());
+        // The WB DH8 flags are cleared at the re-apply's time, with a cleared event each.
+        $cleared = DB::table('quality_flags')->join('flights', 'flights.id', '=', 'quality_flags.flight_id')
+            ->where(['rule' => 'type_missing', 'state' => 'cleared'])->get(['flights.airline_iata', 'flights.ac_type_iata', 'quality_flags.id', 'quality_flags.cleared_at']);
+        $this->assertCount(8, $cleared);
+        $this->assertTrue($cleared->every(fn ($f) => $f->airline_iata === 'WB' && $f->ac_type_iata === 'DH8' && str_starts_with($f->cleared_at, '2026-10-29 07:44:30')));
+        $this->assertSame(8, DB::table('quality_flag_events')->where('kind', 'cleared')->whereIn('flag_id', $cleared->pluck('id'))->count());
+    }
+
+    public function test_reapply_runs_the_quality_rules_so_new_stands_flag_a_pkg_without_a_poll(): void
+    {
+        $this->poll();
+        $this->assertSame([], $this->openStandFlags());
+        $this->stand('A2');
+        $this->stand('A5');
+
+        $this->artisan('hub:reapply-corrections')
+            ->expectsOutputToContain('0 flights corrected, 0 correction events; quality:')
+            ->assertExitCode(0);
+
+        $this->assertSame(1, DB::table('polls')->count(), 'no poll ran');
+        $this->assertSame([self::KQ478D], $this->openStandFlags());
+        $this->assertSame(['pkg' => 'A2B'], json_decode(DB::table('quality_flags')->where('rule', 'stand_unknown')->value('details'), true));
+    }
+
+    public function test_reapply_on_a_stale_feed_corrects_but_leaves_the_quality_rules_to_the_next_ok_poll(): void
+    {
+        $this->poll();
+        $this->aircraftType('WB', 'DH8', 'DH8D', 'Dash 8-400 (TEST)', 'M');
+        $open = fn () => DB::table('quality_flags')->where(['rule' => 'type_missing', 'state' => 'open'])->count();
+        $before = [DB::table('quality_flags')->count(), DB::table('quality_flag_events')->count()];
+
+        // 16 minutes after the last ok poll the feed is stale (D-037): the clock rules would
+        // flag times the hub has not received yet, so no rule runs.
+        $this->travel(16)->minutes();
+        $this->artisan('hub:reapply-corrections')
+            ->expectsOutputToContain('8 flights corrected, 24 correction events; quality rules not run (the feed is stale; the next ok poll runs them).')
+            ->assertExitCode(0);
+
+        $this->assertSame($before, [DB::table('quality_flags')->count(), DB::table('quality_flag_events')->count()]);
+        $this->assertSame(11, $open());
+        $this->poll();
+        $this->assertSame(3, $open());
     }
 
     public function test_a_deactivated_correction_returns_the_aodb_value(): void

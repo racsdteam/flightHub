@@ -9,10 +9,12 @@ use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Security headers on every web response (D4). The CSP allows only the hub's
- * own origin plus a per-request nonce for the inline <style>/<script> that
- * Livewire injects; no 'unsafe-eval' (Livewire runs its CSP-safe build), no
- * 'unsafe-inline'.
+ * Security headers on EVERY response (global middleware, outermost): admin screens, sign-in,
+ * the fallback 404 of an unknown URL, the distribution API, /api/docs and /api/openapi.yaml.
+ * nosniff, X-Frame-Options, Referrer-Policy and Permissions-Policy everywhere; HSTS in
+ * production. The CSP goes on HTML responses: it allows only the hub's own origin plus a
+ * per-request nonce for the inline <style>/<script> that Livewire injects; no 'unsafe-eval'
+ * (Livewire runs its CSP-safe build), no 'unsafe-inline'.
  */
 class SecurityHeaders
 {
@@ -25,17 +27,19 @@ class SecurityHeaders
 
         $response = $next($request);
 
-        $response->headers->set('Content-Security-Policy', implode('; ', [
-            "default-src 'none'",
-            "script-src 'self' 'nonce-{$nonce}'",
-            "style-src 'self' 'nonce-{$nonce}'",
-            "img-src 'self' data:",
-            "font-src 'self'",
-            "connect-src 'self'",
-            "form-action 'self'",
-            "frame-ancestors 'none'",
-            "base-uri 'none'",
-        ]));
+        if (self::isHtml($response)) {
+            $response->headers->set('Content-Security-Policy', implode('; ', [
+                "default-src 'none'",
+                "script-src 'self' 'nonce-{$nonce}'",
+                "style-src 'self' 'nonce-{$nonce}'",
+                "img-src 'self' data:",
+                "font-src 'self'",
+                "connect-src 'self'",
+                "form-action 'self'",
+                "frame-ancestors 'none'",
+                "base-uri 'none'",
+            ]));
+        }
         $response->headers->set('X-Frame-Options', 'DENY');
         $response->headers->set('X-Content-Type-Options', 'nosniff');
         $response->headers->set('Referrer-Policy', 'same-origin');
@@ -45,5 +49,16 @@ class SecurityHeaders
         }
 
         return $response;
+    }
+
+    /**
+     * HTML, or no Content-Type yet (an error page rendered by the exception handler gets
+     * PHP's default text/html when it is sent).
+     */
+    private static function isHtml(Response $response): bool
+    {
+        $type = $response->headers->get('Content-Type');
+
+        return $type === null || str_starts_with(strtolower($type), 'text/html');
     }
 }

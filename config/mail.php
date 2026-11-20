@@ -115,4 +115,17 @@ return [
         'name' => env('MAIL_FROM_NAME', env('APP_NAME', 'Laravel')),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Stale / recovery alert: extra recipients (D-055)
+    |--------------------------------------------------------------------------
+    |
+    | Comma-separated addresses (such as RAC IT's mailbox) that receive the
+    | stale and recovery mails as well as the active admins; empty = none.
+    | An invalid address is skipped and logged (hub:check-feed).
+    |
+    */
+
+    'alert_extra_recipients' => env('ALERT_EXTRA_RECIPIENTS', ''),
+
 ];

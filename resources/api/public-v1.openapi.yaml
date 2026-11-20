@@ -224,8 +224,8 @@ components:
         updatedAt: {type: ['string', 'null'], format: date-time, description: When this flight last changed (within the 5-minute refresh).}
         inFeed: {type: boolean, description: false once the airport no longer lists the flight.}
         sameAs: {type: ['string', 'null'], description: Id of the flight this one duplicates.}
-        rotationNext: {type: ['string', 'null'], description: Next departure of the same aircraft (by registration).}
-        rotationPrev: {type: ['string', 'null'], description: Previous arrival of the same aircraft (by registration).}
+        rotationNext: {type: ['string', 'null'], description: Next departure of the same aircraft.}
+        rotationPrev: {type: ['string', 'null'], description: Previous arrival of the same aircraft.}
         rotationSource: {type: ['string', 'null'], enum: [aodb, registration, null], description: How that link was made.}
         minTurnaroundMinutes: {type: ['integer', 'null'], description: Minimum turnaround time of the aircraft type.}
     Flight:

@@ -2,6 +2,9 @@
     <section class="card auth-card">
         <div class="auth-head"><x-icon name="lock" size="28" /><h1>Sign in</h1></div>
         <p class="auth-step">Step 1 of 2 · then the 6-digit code from your authenticator app</p>
+        @if (request()->query('session') === 'ended')
+            <div class="banner banner-warning" role="status"><x-icon name="warning" size="20" /><p>Your session has ended. Please sign in again.</p></div>
+        @endif
         <div class="banner banner-info"><x-icon name="info" size="20" /><p>Admins and data stewards sign in with their email and password, then an authenticator-app code.</p></div>
         <form method="POST" action="{{ route('login.store') }}" novalidate>
             @csrf

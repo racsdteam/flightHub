@@ -115,6 +115,34 @@ class ScreensTest extends PollTestCase
         $this->assertTrue(ReapplyPending::isPending());
     }
 
+    public function test_reactivating_a_reference_row_is_a_new_review_and_deactivating_is_not(): void
+    {
+        $admin = $this->user('admin');
+        $steward = $this->user('steward');
+        Livewire::actingAs($admin);
+        Livewire::test(AirportCodes::class)->call('create')
+            ->set('form.aodb_value', 'TK')->set('form.corrected_iata', 'IST')->set('form.corrected_icao', 'LTFM')->set('form.reason', 'Istanbul written as the airline code')
+            ->call('save')->assertHasNoErrors();
+        $id = DB::table('airport_code_corrections')->where('aodb_value', 'TK')->value('id');
+        $row = fn () => DB::table('airport_code_corrections')->where('id', $id)->first(['active', 'reviewed_by', 'reviewed_on']);
+        $this->assertSame([1, $admin->name, '2026-10-29'], array_values((array) $row()));
+
+        // Deactivating (next day, by the steward) keeps the last review.
+        $this->travel(1)->days();
+        Livewire::actingAs($steward);
+        Livewire::test(AirportCodes::class)->call('toggle', $id)->assertHasNoErrors();
+        $this->assertSame([0, $admin->name, '2026-10-29'], array_values((array) $row()));
+
+        // Reactivating (a day later) is a new review: the steward, today (Kigali).
+        $this->travel(1)->days();
+        Livewire::test(AirportCodes::class)->call('toggle', $id)->assertHasNoErrors();
+        $this->assertSame([1, $steward->name, '2026-10-31'], array_values((array) $row()));
+
+        $audit = json_decode(DB::table('admin_audit')->where('action', 'reference.reactivated')->value('details'), true);
+        $this->assertSame([$admin->name, $steward->name, '2026-10-29', '2026-10-31'], [$audit['before']['reviewed_by'], $audit['after']['reviewed_by'], $audit['before']['reviewed_on'], $audit['after']['reviewed_on']]);
+        $this->assertSame($steward->email, DB::table('admin_audit')->where('action', 'reference.reactivated')->value('actor'));
+    }
+
     public function test_a_key_is_shown_once_and_stored_only_as_its_hash(): void
     {
         $this->consumer();

@@ -117,7 +117,7 @@
 
 @auth
     @livewireScripts
-    <script src="{{ asset('js/hub.js') }}" defer></script>
+    <script src="{{ asset('js/hub.js') }}" data-session-ended="{{ route('login', ['session' => 'ended']) }}" defer></script>
 @endauth
 </body>
 </html>

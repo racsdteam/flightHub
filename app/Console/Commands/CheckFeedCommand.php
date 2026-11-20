@@ -9,12 +9,15 @@ use App\Models\User;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 
 /**
- * Stale-feed alert (D-041): one email to every active admin when the feed
- * turns stale, one when it recovers; never one per run. The last state is in
- * the cache ("ok" when unknown, so a feed that never worked is reported).
+ * Stale-feed alert (D-041, D-055): one email to every active admin and to every address in
+ * ALERT_EXTRA_RECIPIENTS when the feed turns stale, one when it recovers; never one per run,
+ * and one per address (an address listed twice, or also an admin's, gets one mail). An
+ * invalid extra address is skipped and logged. The last state is in the cache ("ok" when
+ * unknown, so a feed that never worked is reported).
  */
 class CheckFeedCommand extends Command
 {
@@ -22,7 +25,7 @@ class CheckFeedCommand extends Command
 
     protected $signature = 'hub:check-feed';
 
-    protected $description = 'Email the active admins when the AODB feed turns stale or recovers';
+    protected $description = 'Email the active admins and the extra alert recipients when the AODB feed turns stale or recovers';
 
     public function handle(): int
     {
@@ -36,21 +39,56 @@ class CheckFeedCommand extends Command
         }
 
         $last = DB::table('polls')->orderByDesc('id')->first(['outcome', 'finished_at']);
-        $recipients = User::where('active', true)->where('role', 'admin')->get();
-        foreach ($recipients as $admin) {
-            Mail::to($admin->email)->send(new FeedStateMail($feed['feed'], $feed['asOf'], $last?->outcome, $last?->finished_at));
+        $admins = User::where('active', true)->where('role', 'admin')->pluck('email')->all();
+        $extra = $this->extraRecipients();
+
+        // One mail per address: admins first, then the extra addresses not already mailed.
+        $addresses = [];
+        foreach ([...$admins, ...$extra] as $address) {
+            $addresses[mb_strtolower($address)] ??= $address;
         }
+        foreach ($addresses as $address) {
+            Mail::to($address)->send(new FeedStateMail($feed['feed'], $feed['asOf'], $last?->outcome, $last?->finished_at));
+        }
+        $extraMailed = count($addresses) - count(array_unique(array_map('mb_strtolower', $admins)));
 
         // Stored after sending: a failed send is retried on the next run.
         Cache::forever(self::STATE_KEY, $feed['feed']);
         Audit::record($feed['feed'] === 'stale' ? 'alert.stale_sent' : 'alert.recovery_sent', [
-            'recipients' => $recipients->count(),
+            'recipients' => count($addresses),
+            'extra_recipients' => $extraMailed,
             'last_good_poll' => $feed['asOf'],
             'last_outcome' => $last?->outcome,
         ], actor: 'hub');
 
-        $this->line("hub:check-feed: {$previous} → {$feed['feed']}; {$recipients->count()} admins emailed.");
+        $this->line("hub:check-feed: {$previous} → {$feed['feed']}; ".count($admins)." admins and {$extraMailed} extra recipients emailed.");
 
         return self::SUCCESS;
+    }
+
+    /**
+     * ALERT_EXTRA_RECIPIENTS: comma-separated, empty = none. Read only when a mail is due, so
+     * an invalid entry is logged once per change of state, not on every run.
+     *
+     * @return list<string>
+     */
+    private function extraRecipients(): array
+    {
+        $valid = [];
+        foreach (explode(',', (string) config('mail.alert_extra_recipients')) as $entry) {
+            $entry = trim($entry);
+            if ($entry === '') {
+                continue;
+            }
+            if (filter_var($entry, FILTER_VALIDATE_EMAIL) === false) {
+                Log::warning('hub:check-feed: an ALERT_EXTRA_RECIPIENTS entry is not a valid email address; skipped.', ['entry' => mb_substr($entry, 0, 100)]);
+                $this->warn('hub:check-feed: skipped an invalid ALERT_EXTRA_RECIPIENTS entry (see the log).');
+
+                continue;
+            }
+            $valid[] = $entry;
+        }
+
+        return $valid;
     }
 }

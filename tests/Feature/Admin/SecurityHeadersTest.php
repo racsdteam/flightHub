@@ -6,6 +6,7 @@ use App\Models\User;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Testing\TestResponse;
+use Tests\Feature\Api\ApiHelpers;
 use Tests\Feature\Collector\PollTestCase;
 
 /**
@@ -14,13 +15,20 @@ use Tests\Feature\Collector\PollTestCase;
 class SecurityHeadersTest extends PollTestCase
 {
     use AdminHelpers;
+    use ApiHelpers;
 
-    private function assertHeaders(TestResponse $response): void
+    /** The headers every response carries (global middleware, Batch 11b). */
+    private function assertBaseHeaders(TestResponse $response): void
     {
         $response->assertHeader('X-Frame-Options', 'DENY')
             ->assertHeader('X-Content-Type-Options', 'nosniff')
             ->assertHeader('Referrer-Policy', 'same-origin')
-            ->assertHeader('Permissions-Policy');
+            ->assertHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
+    }
+
+    private function assertHeaders(TestResponse $response): void
+    {
+        $this->assertBaseHeaders($response);
         $csp = $response->headers->get('Content-Security-Policy');
         $this->assertStringContainsString("default-src 'none'", $csp);
         $this->assertStringContainsString("frame-ancestors 'none'", $csp);
@@ -79,9 +87,49 @@ class SecurityHeadersTest extends PollTestCase
     public function test_hsts_only_in_production(): void
     {
         $this->get('/login')->assertHeaderMissing('Strict-Transport-Security');
+        $this->get('/nowhere')->assertHeaderMissing('Strict-Transport-Security');
 
         $this->app['env'] = 'production';
-        $this->get('/login')->assertHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+        $hsts = 'max-age=31536000; includeSubDomains';
+        $this->get('/login')->assertHeader('Strict-Transport-Security', $hsts);
+        $this->get('/nowhere')->assertHeader('Strict-Transport-Security', $hsts);
+        $this->api('flights?'.self::POLL_WINDOW, null)->assertHeader('Strict-Transport-Security', $hsts);
+        $this->get('/api/openapi.yaml')->assertHeader('Strict-Transport-Security', $hsts);
+    }
+
+    public function test_an_unknown_url_gets_the_headers_and_the_csp(): void
+    {
+        $response = $this->get('/nowhere')->assertNotFound();
+
+        $this->assertHeaders($response);
+        $this->assertStringContainsString('<html', (string) $response->getContent());
+        $this->assertNoOutsideUrl((string) $response->getContent());
+    }
+
+    public function test_api_responses_get_the_headers_without_a_csp(): void
+    {
+        $this->poll();
+        $key = $this->consumerKey(['route']);
+
+        foreach ([
+            $this->api('flights?'.self::POLL_WINDOW, $key)->assertOk(),
+            $this->api('flights?'.self::POLL_WINDOW, null)->assertUnauthorized(),
+            $this->api('flights?from=nonsense', $key)->assertUnprocessable(),
+            $this->getJson('/api/v1/nowhere', ['Authorization' => 'Bearer '.$key])->assertNotFound(),
+        ] as $response) {
+            $this->assertBaseHeaders($response);
+            $this->assertStringStartsWith('application/json', (string) $response->headers->get('Content-Type'));
+            $this->assertNull($response->headers->get('Content-Security-Policy'));
+        }
+    }
+
+    public function test_the_api_documents_get_the_headers(): void
+    {
+        $yaml = $this->get('/api/openapi.yaml')->assertOk();
+        $this->assertBaseHeaders($yaml);
+        $this->assertNull($yaml->headers->get('Content-Security-Policy'));
+
+        $this->assertHeaders($this->get('/api/docs')->assertOk());
     }
 
     public function test_fonts_and_css_are_served_from_the_hub(): void
