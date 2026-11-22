@@ -58,8 +58,8 @@ class PublicApiDocumentTest extends PollTestCase
         $this->assertSame(['/flights', '/flights/{id}'], array_keys($paths));
         $this->assertSame(['get'], array_keys($paths['/flights']));
         $this->assertSame(['get'], array_keys($paths['/flights/{id}']));
-        $this->assertSame(['200', '401', '422', '429'], array_map('strval', array_keys($paths['/flights']['get']['responses'])));
-        $this->assertSame(['200', '401', '404', '422', '429'], array_map('strval', array_keys($paths['/flights/{id}']['get']['responses'])));
+        $this->assertSame(['200', '401', '403', '422', '429'], array_map('strval', array_keys($paths['/flights']['get']['responses'])));
+        $this->assertSame(['200', '401', '403', '404', '422', '429'], array_map('strval', array_keys($paths['/flights/{id}']['get']['responses'])));
         $this->assertSame(['day', 'from', 'to', 'flow', 'id', 'history'], array_keys(PublicOpenApi::tree()['components']['parameters']));
         $this->assertArrayNotHasKey('servers', PublicOpenApi::tree(), 'the server is added when served');
         $this->assertSame(['referenceTime', 'updatedAt', 'inFeed', 'sameAs', 'rotationNext', 'rotationPrev', 'rotationSource', 'minTurnaroundMinutes'],

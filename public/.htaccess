@@ -19,6 +19,14 @@ DirectoryIndex index.php
 
     RewriteEngine On
 
+    # HTTPS only (D-062): a page asked over plain HTTP is redirected to HTTPS. The pattern is
+    # relative to this folder (works under /flighthub and at a domain root). Never the API: it
+    # answers plain HTTP with 403 (app/Http/Middleware/ApiGate.php), so a client configured
+    # with http:// fails visibly instead of sending its key in clear. hub:preflight checks it.
+    RewriteCond %{HTTPS} !=on
+    RewriteCond %{HTTP:X-Forwarded-SSL} !on
+    RewriteRule !^api/ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+
     # Handle Authorization Header (the distribution API's Bearer keys depend on it)
     RewriteCond %{HTTP:Authorization} .
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]

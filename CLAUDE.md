@@ -49,8 +49,9 @@ subdomain is bought, D-061), credentials.
   the DDL login) → maintenance on, before any file changes → wait (≤ 120 s) for a running
   hub:poll / reapply / backfill → git merge --ff-only TARGET (never a pull) → composer install →
   config:clear → migrations (DDL) → grants → re-apply → caches (route cache only when the base
-  path is empty) → serving check (APP_URL, APP_URL/, APP_URL/api/v1/health; no cookie outside
-  the base path) → preflight → up.
+  path is empty) → serving check (APP_URL, APP_URL/, APP_URL/api/v1/health; over plain HTTP the
+  page → 301 to HTTPS and the API → 403; no cookie outside the base path) → preflight → up.
+  deploy.sh refuses before maintenance when pgrep (the running-jobs wait) is missing.
   First install (no vendor/, nothing live): code and composer first, then the DDL login and
   maintenance. First deploy only: create the first admin with php artisan
   hub:admin-create {email} {name} --role=admin (temporary password printed once).
@@ -60,8 +61,10 @@ subdomain is bought, D-061), credentials.
   hub:preflight, as an assignment prefix; hub:preflight fails if it is in .env or in
   bootstrap/cache/config.php.
 - hub:preflight prints check names and pass / warn / FAIL / skipped only, never a value.
-  scripts/backup.sh runs nightly (D-047; restore check scripts/restore-check.sh); credentials in
-  mode-600 files outside the repository, passed with --defaults-extra-file.
+  scripts/backup.sh runs nightly (D-047; restore check scripts/restore-check.sh) into
+  /home/sysrac/flight-hub-backups (FLIGHTHUB_BACKUP_DIR; created mode 700 when missing; not
+  /home/sysrac/backups, which belongs to root); credentials in mode-600 files outside the
+  repository, passed with --defaults-extra-file.
   No Node anywhere: CSS is hand-written and committed (D-018).
 - cPanel cron runs the scheduler every minute. No daemons, no long-running queue workers.
   Scheduled commands use withoutOverlapping and finish well inside their interval. The
@@ -89,7 +92,11 @@ subdomain is bought, D-061), credentials.
   send a different HSTS value while it shares the host.
 - hub:preflight FAILs on: APP_URL not exactly the constant, APP_URL's path ≠ FLIGHTHUB_BASE_PATH,
   a route cache under a base path, SESSION_PATH ≠ the base path, a missing or refused
-  SESSION_COOKIE, and a public/.htaccess without the ea-php83 handler or DirectoryIndex.
+  SESSION_COOKIE, and a public/.htaccess without the ea-php83 handler, DirectoryIndex or the
+  HTTPS rule (D-062).
+- HTTPS only (D-062): public/.htaccess redirects plain HTTP to HTTPS (RewriteCond %{HTTPS} !=on,
+  RewriteCond %{HTTP:X-Forwarded-SSL} !on, RewriteRule !^api/ … [R=301,L]: relative to the
+  folder, so it works under /flighthub and at a domain root); the API is never redirected.
 
 ## Database
 - Runtime user = default connection `mariadb`: data access only; NO UPDATE/DELETE on history
@@ -201,6 +208,9 @@ subdomain is bought, D-061), credentials.
   is ignored. Every refusal (missing, malformed, unknown, wrong, revoked, expired, inactive
   consumer) is the same 401 {"error": "UNAUTHORIZED"}. Errors are JSON
   {"error", "message"}, never a stack trace.
+- HTTPS only (D-062): in production a call over plain HTTP (neither HTTPS on nor
+  X-Forwarded-SSL: on) is 403 {"error": "HTTPS_REQUIRED"}, decided in ApiGate before any key is
+  read or looked up, never a redirect; logged as an unauthenticated call, without key data.
 - Field groups (config/api_fields.php, D-039) are deny-by-default: a field in no group is
   never served, new AODB fields included; identity is always given. The same filter applies
   to flights, history, first_seen values and /changes.

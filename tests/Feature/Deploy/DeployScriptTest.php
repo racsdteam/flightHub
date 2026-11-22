@@ -117,16 +117,22 @@ class DeployScriptTest extends TestCase
             url="${@: -1}"
             echo "curl $*" >> "$STUB_LOG"
             cookies=()
+            location=""
+            type=""
             case "$url" in
-              */api/v1/health) code="${STUB_HEALTH:-401}" ;;
+              # Plain HTTP (D-062): Apache's redirect for pages, the API's JSON 403.
+              http://*/api/v1/health) code="${STUB_HTTP_HEALTH:-403}"; type="${STUB_HTTP_HEALTH_TYPE-application/json}" ;;
+              http://*) code="${STUB_HTTP_ROOT:-301}"; location="${STUB_HTTP_LOCATION-https://${url#http://}}" ;;
+              */api/v1/health) code="${STUB_HEALTH:-401}"; type="application/json" ;;
               */)
                 code="${STUB_ROOT:-302}"
                 cookies=("${STUB_COOKIE-XSRF-TOKEN=Sentinel-cookie-value; expires=Sat, 22 Nov 2026 12:00:00 GMT; Max-Age=1800; path=/flighthub; secure; samesite=strict}"
                   "flighthub_session=Sentinel-cookie-value; expires=Sat, 22 Nov 2026 12:00:00 GMT; Max-Age=1800; path=/flighthub; secure; httponly; samesite=strict") ;;
-              *) code="${STUB_BARE:-302}" ;;
+              *) code="${STUB_BARE:-302}"; location="${STUB_LOCATION:-}" ;;
             esac
             printf 'HTTP/1.1 %s Stub\r\n' "$code"
-            [ -n "${STUB_LOCATION:-}" ] && [ "${url: -1}" != / ] && printf 'Location: %s\r\n' "$STUB_LOCATION"
+            [ -n "$location" ] && printf 'Location: %s\r\n' "$location"
+            [ -n "$type" ] && printf 'Content-Type: %s\r\n' "$type"
             for c in "${cookies[@]}"; do [ -n "$c" ] && printf 'Set-Cookie: %s\r\n' "$c"; done
             printf '\r\n'
             printf 'HTTP_CODE=%s' "$code"
@@ -300,6 +306,8 @@ class DeployScriptTest extends TestCase
             self::curl(self::APP_URL),
             self::curl(self::APP_URL.'/'),
             self::curl(self::APP_URL.'/api/v1/health'),
+            self::curl('http://systems.rac.co.rw/flighthub/'),
+            self::curl('http://systems.rac.co.rw/flighthub/api/v1/health'),
             'artisan hub:preflight ddl=yes',
             'artisan up ddl=no',
         ]);
@@ -316,6 +324,8 @@ class DeployScriptTest extends TestCase
             array_map(fn ($l) => explode(' ', $l)[1], $caches));
         $this->assertStringContainsString('No route cache: the hub is served under /flighthub (D-061).', $run['out']);
         $this->assertStringContainsString('No cookie outside /flighthub.', $run['out']);
+        $this->assertStringContainsString('http://systems.rac.co.rw/flighthub/ answered 301 to https://systems.rac.co.rw/flighthub/.', $run['out']);
+        $this->assertStringContainsString('http://systems.rac.co.rw/flighthub/api/v1/health answered 403 over plain HTTP, as it must.', $run['out']);
         $this->assertStringNotContainsString('Sentinel-cookie-value', $run['out']);
         $this->assertSame([], self::grep($log, '/optimize:clear|artisan cache:clear/'));
         // Only the login check, migrate, grants-sql and the preflight ever saw the DDL password.
@@ -545,6 +555,59 @@ class DeployScriptTest extends TestCase
         $process->run();
 
         $this->assertSame(0, $process->getExitCode(), 'storage/framework/schedule.lock must be git-ignored');
+    }
+
+    /**
+     * B3 (D-062): over plain HTTP, a page is redirected to the same address over HTTPS and the API
+     * answers its own 403 (JSON). Anything else leaves maintenance on.
+     */
+    public function test_the_serving_check_wants_https_only(): void
+    {
+        touch($this->dir.'/grants-applied');
+
+        foreach ([
+            [['STUB_HTTP_ROOT' => '200'], 'expected 301 to https://systems.rac.co.rw/flighthub/ (HTTPS only, D-062)'],
+            [['STUB_HTTP_LOCATION' => 'https://systems.rac.co.rw/'], 'answered 301 to https://systems.rac.co.rw/; expected 301'],
+            [['STUB_HTTP_HEALTH' => '301'], 'catches the API: it must leave ^api/ alone'],
+            [['STUB_HTTP_HEALTH' => '401'], 'taken as HTTPS or APP_ENV is not production'],
+            [['STUB_HTTP_HEALTH_TYPE' => 'text/html; charset=UTF-8'], 'comes from in front of the hub (Imunify360)'],
+        ] as [$stub, $hint]) {
+            $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD] + $stub);
+
+            $this->assertSame(1, $run['code'], json_encode($stub));
+            $this->assertStringContainsString($hint, $run['out'], json_encode($stub));
+            $this->assertStringContainsString('✗ DEPLOY FAILED during: Serving check', $run['out']);
+            $this->assertSame([], self::grep($run['log'], '/^artisan (hub:preflight ddl|up)/'));
+        }
+
+        // An http:// APP_URL never gets that far.
+        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'STUB_APP_URL' => 'http://systems.rac.co.rw/flighthub']);
+        $this->assertSame(1, $run['code']);
+        $this->assertStringContainsString('is not an https:// address', $run['out']);
+        $this->assertSame([], self::grep($run['log'], '/^curl/'));
+    }
+
+    /**
+     * C1: the running-jobs wait needs pgrep; without it the deploy is refused before maintenance.
+     */
+    public function test_a_missing_pgrep_is_refused_before_maintenance(): void
+    {
+        // The system's tools without pgrep (and no pgrep stub).
+        File::delete($this->dir.'/bin/pgrep');
+        File::makeDirectory($this->dir.'/sys');
+        foreach ([...glob('/usr/bin/*'), ...glob('/bin/*')] as $tool) {
+            $name = basename($tool);
+            if ($name !== 'pgrep' && ! file_exists($this->dir.'/sys/'.$name) && ! file_exists($this->dir.'/bin/'.$name)) {
+                symlink($tool, $this->dir.'/sys/'.$name);
+            }
+        }
+
+        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'PATH' => $this->dir.'/bin:'.$this->dir.'/sys']);
+
+        $this->assertSame(1, $run['code'], $run['out']);
+        $this->assertStringContainsString('pgrep is not available: the running-jobs wait needs pgrep.', $run['out']);
+        $this->assertStringContainsString('Nothing has been changed', $run['out']);
+        $this->assertSame([], self::grep($run['log'], '/^(git (fetch|merge )|artisan)/'));
     }
 
     public function test_a_dirty_tree_a_wrong_remote_or_php_refuse_before_anything(): void

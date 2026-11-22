@@ -3,11 +3,13 @@
 # RAC Flight Data Hub — nightly database backup (D-047). Runbook: docs/DEPLOY.md.
 #
 # cPanel cron, as the account user sysrac:
-#   30 1 * * * /home/sysrac/flight-hub/scripts/backup.sh >> /home/sysrac/backups/flighthub/backup.log 2>&1
+#   30 1 * * * /home/sysrac/flight-hub/scripts/backup.sh >> /home/sysrac/flight-hub-backups/backup.log 2>&1
 #
 # Dumps sysrac_flighthub as sysrac_fhbackup (SELECT, SHOW VIEW, LOCK TABLES, TRIGGER only) with
-# mysqldump --single-transaction --triggers, gzipped, into /home/sysrac/backups/flighthub/, and keeps
-# the 14 newest. The credentials live only in /home/sysrac/.flighthub-backup.cnf (mode 600, outside
+# mysqldump --single-transaction --triggers, gzipped, into /home/sysrac/flight-hub-backups/, and keeps
+# the 14 newest. The folder sits beside the app, outside the repository and outside public_html
+# (/home/sysrac/backups belongs to root, so sysrac cannot create a folder there); it is created
+# mode 700 when it is missing. The credentials live only in /home/sysrac/.flighthub-backup.cnf (mode 600, outside
 # the repository), passed with --defaults-extra-file — never on the command line, where ps shows them:
 #
 #   [client]
@@ -26,7 +28,7 @@ set -euo pipefail
 
 DB="${FLIGHTHUB_BACKUP_DB:-sysrac_flighthub}"
 CNF="${FLIGHTHUB_BACKUP_CNF:-/home/sysrac/.flighthub-backup.cnf}"
-DIR="${FLIGHTHUB_BACKUP_DIR:-/home/sysrac/backups/flighthub}"
+DIR="${FLIGHTHUB_BACKUP_DIR:-/home/sysrac/flight-hub-backups}"
 APP_DIR="${FLIGHTHUB_APP_DIR:-/home/sysrac/flight-hub}"
 KEEP="${FLIGHTHUB_BACKUP_KEEP:-14}"
 DUMP_BIN="${FLIGHTHUB_MYSQLDUMP:-$(command -v mariadb-dump || command -v mysqldump || true)}"
@@ -57,7 +59,7 @@ case "$(cd "$(dirname "$CNF")" && pwd -P)/" in
     "$(cd "$APP_DIR" 2>/dev/null && pwd -P || echo "$APP_DIR")"/*) fail "the credentials file must be outside the repository ($APP_DIR)." ;;
 esac
 
-mkdir -p "$DIR"
+[ -d "$DIR" ] || mkdir -p -m 700 "$DIR" || fail "cannot create the backup folder $DIR (FLIGHTHUB_BACKUP_DIR)."
 chmod 700 "$DIR"
 umask 077
 TIME_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

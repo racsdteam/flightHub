@@ -82,7 +82,8 @@ class PreflightTest extends PollTestCase
         $this->assertArrayHasKey('no pending migrations', $results);
         $this->assertArrayHasKey('every append-only table has both its triggers', $results);
         // The committed public/.htaccess passes (the fake reads the real file unless a test sets one).
-        $this->assertSame(['pass', 'pass'], [$results['public/.htaccess sets the ea-php83 handler'], $results['public/.htaccess has DirectoryIndex index.php']]);
+        $this->assertSame(['pass', 'pass', 'pass'], [$results['public/.htaccess sets the ea-php83 handler'], $results['public/.htaccess has DirectoryIndex index.php'],
+            $results['public/.htaccess redirects plain HTTP to HTTPS, not the API']]);
     }
 
     /**
@@ -94,7 +95,8 @@ class PreflightTest extends PollTestCase
             'PHP 8.3.x', 'PHP extension mbstring', 'PHP extension pdo_mysql', 'APP_ENV is production', 'APP_DEBUG is off', 'APP_KEY is set',
             'APP_URL is https://systems.rac.co.rw/flighthub', 'APP_URL path is FLIGHTHUB_BASE_PATH', 'no route cache under a base path',
             'SESSION_PATH is the base path', 'SESSION_COOKIE is set, not laravel_session or kia_pulse_session',
-            'public/.htaccess sets the ea-php83 handler', 'public/.htaccess has DirectoryIndex index.php', 'display_errors is off', 'DB_CONNECTION is mariadb', 'DB_PASSWORD is set', 'AODB_CLIENT is http',
+            'public/.htaccess sets the ea-php83 handler', 'public/.htaccess has DirectoryIndex index.php',
+            'public/.htaccess redirects plain HTTP to HTTPS, not the API', 'display_errors is off', 'DB_CONNECTION is mariadb', 'DB_PASSWORD is set', 'AODB_CLIENT is http',
             'AODB_PASSWORD is set', 'MAIL_MAILER is smtp', 'MAIL_FROM_ADDRESS is set', 'no DDL password in .env', 'no DDL password in the config cache',
             'runtime database connection', 'hub:check-grants', 'session cookie is Secure', 'session lifetime is 30 minutes', 'storage/ is writable',
             'bootstrap/cache/ is writable', 'TLS certificate of APP_URL is valid', 'config cache matches .env', 'route cache matches the routes',
@@ -122,6 +124,8 @@ class PreflightTest extends PollTestCase
             'SESSION_COOKIE is set, not laravel_session or kia_pulse_session' => $this->probe->envFile['SESSION_COOKIE'] = false,
             'public/.htaccess sets the ea-php83 handler' => $this->probe->htaccess = str_replace('x-httpd-ea-php83', 'x-httpd-ea-php82', (string) file_get_contents(public_path('.htaccess'))),
             'public/.htaccess has DirectoryIndex index.php' => $this->probe->htaccess = str_replace("\nDirectoryIndex index.php\n", "\n# DirectoryIndex index.php\n", (string) file_get_contents(public_path('.htaccess'))),
+            // The rule catching the API too (no !^api/): not the rule.
+            'public/.htaccess redirects plain HTTP to HTTPS, not the API' => $this->probe->htaccess = str_replace('RewriteRule !^api/ https://', 'RewriteRule ^ https://', (string) file_get_contents(public_path('.htaccess'))),
             'display_errors is off' => $this->probe->ini['display_errors'] = 'On',
             'DB_CONNECTION is mariadb' => config(['database.default' => 'sqlite']),
             'DB_PASSWORD is set' => $this->probe->envFile['DB_PASSWORD'] = false,
@@ -182,6 +186,25 @@ class PreflightTest extends PollTestCase
         }
         config(['session.cookie' => 'flighthub_session']);
         $this->assertSame('pass', $this->preflight(0)['SESSION_COOKIE is set, not laravel_session or kia_pulse_session']);
+    }
+
+    /**
+     * B4 (D-062): the three lines, in order; one missing or out of order FAILs.
+     */
+    public function test_the_https_rule_must_be_whole(): void
+    {
+        $file = (string) file_get_contents(public_path('.htaccess'));
+        $this->assertStringContainsString(implode("\n    ", Preflight::HTACCESS_HTTPS_RULE), $file, 'committed inside the mod_rewrite block');
+        $this->assertLessThan(strpos($file, 'RewriteRule ^ index.php [L]'), strpos($file, Preflight::HTACCESS_HTTPS_RULE[2]), 'before Laravel\'s own rules');
+
+        foreach ([
+            str_replace(Preflight::HTACCESS_HTTPS_RULE[1]."\n", '', $file),
+            str_replace(Preflight::HTACCESS_HTTPS_RULE[0]."\n    ".Preflight::HTACCESS_HTTPS_RULE[1], Preflight::HTACCESS_HTTPS_RULE[1]."\n    ".Preflight::HTACCESS_HTTPS_RULE[0], $file),
+            str_replace(Preflight::HTACCESS_HTTPS_RULE[2], '# '.Preflight::HTACCESS_HTTPS_RULE[2], $file),
+        ] as $i => $htaccess) {
+            $this->probe->htaccess = $htaccess;
+            $this->assertSame('FAIL', $this->preflight(1)['public/.htaccess redirects plain HTTP to HTTPS, not the API'], "variant {$i}");
+        }
     }
 
     public function test_app_url_must_be_exactly_the_constant(): void

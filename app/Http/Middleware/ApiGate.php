@@ -16,6 +16,11 @@ use Symfony\Component\HttpFoundation\Response;
  * Every /api/v1 call: key check (Authorization: Bearer only), rate limits,
  * and one api_calls row once the response is known, refused calls included.
  * Never logs the key or the Authorization header.
+ *
+ * HTTPS only (D-062): in production a call over plain HTTP gets 403 HTTPS_REQUIRED before the
+ * key is read or looked up, and is never redirected (a client would follow the redirect and keep
+ * sending its key in clear). It is logged as an unauthenticated call. "Over HTTPS" is what
+ * public/.htaccess's redirect rule accepts: HTTPS on, or X-Forwarded-SSL: on.
  */
 class ApiGate
 {
@@ -29,6 +34,10 @@ class ApiGate
         $auth = null;
 
         try {
+            if (app()->environment('production') && ! self::overHttps($request)) {
+                throw new ApiException(403, 'HTTPS_REQUIRED', 'HTTPS required.');
+            }
+
             // The key first: a valid key is never blocked by the IP limit.
             $auth = ApiKeys::authenticate($request->header('Authorization'));
             if ($auth === null) {
@@ -56,6 +65,11 @@ class ApiGate
         $this->log($request, $response, $auth, $at, $started);
 
         return $response;
+    }
+
+    private static function overHttps(Request $request): bool
+    {
+        return $request->isSecure() || strtolower(trim((string) $request->header('X-Forwarded-SSL'))) === 'on';
     }
 
     private static function rateLimited(int $seconds): ApiException

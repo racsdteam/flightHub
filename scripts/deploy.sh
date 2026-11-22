@@ -58,6 +58,7 @@ BYPASS_COOKIE=""
 SERVED_BASE_PATH=""
 HTTP_CODE=""
 HTTP_LOCATION=""
+HTTP_CONTENT_TYPE=""
 BAD_COOKIES=""
 FIRST_INSTALL="no"
 FILES_CHANGED="no"
@@ -177,7 +178,7 @@ dry_run() {
 scripts/deploy.sh --dry-run: the steps of a deploy (nothing is run).
 
   Preconditions (all before maintenance; any refusal changes nothing):
-    · not root; PHP 8.3.x at $PHP; curl; composer (FLIGHTHUB_COMPOSER) runs with that PHP
+    · not root; PHP 8.3.x at $PHP; curl; pgrep; composer (FLIGHTHUB_COMPOSER) runs with that PHP
     · origin is github-flighthub:… (the deploy key); the git working tree is clean
     · git fetch; TARGET = the upstream commit; HEAD is TARGET or its ancestor
     · FLIGHTHUB_DEPLOY_AUTHORIZED equals DEPLOY_AUTHORISATION in TARGET:scripts/deploy.sh
@@ -203,8 +204,9 @@ scripts/deploy.sh --dry-run: the steps of a deploy (nothing is run).
                      route:cache only when hub.base_path is empty (never under /flighthub, D-061)
                      (never optimize:clear or cache:clear)
  10. Serving check   from config('app.url'), with the bypass cookie: APP_URL → 200|302 (or 301 to
-                     APP_URL/), APP_URL/ → 200|302, APP_URL/api/v1/health → 401; no Set-Cookie
-                     with a path outside the base path
+                     APP_URL/), APP_URL/ → 200|302, APP_URL/api/v1/health → 401; over plain HTTP
+                     (D-062): http://<host><base>/ → 301 to APP_URL/, http://<host><base>/api/v1/health
+                     → 403 (JSON); no Set-Cookie with a path outside the base path
  11. Preflight       DB_DDL_USERNAME=… DB_DDL_PASSWORD=… artisan hub:preflight (with the DDL checks)
  12. Up              artisan up
 
@@ -243,6 +245,7 @@ preconditions() {
     version="$("$PHP" -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')" || refuse "PHP at $PHP does not run."
     [ "$version" = "8.3" ] || refuse "PHP 8.3 is required; $PHP is $version."
     command -v curl >/dev/null 2>&1 || refuse "curl is required for the serving check."
+    command -v pgrep >/dev/null 2>&1 || refuse "pgrep is not available: the running-jobs wait needs pgrep."
     if [ -z "$COMPOSER_BIN" ]; then
         COMPOSER_BIN="$(command -v composer || true)"
     fi
@@ -383,9 +386,9 @@ wait_for_jobs() {
     echo "  No job running."
 }
 
-# One request through the web server with the bypass cookie. Sets HTTP_CODE, HTTP_LOCATION and
-# BAD_COOKIES: every Set-Cookie whose Path is not the base path or under it (KIA PULSE and three
-# other apps share the host, D-061), named with its path, never its value.
+# One request through the web server with the bypass cookie. Sets HTTP_CODE, HTTP_LOCATION,
+# HTTP_CONTENT_TYPE and BAD_COOKIES: every Set-Cookie whose Path is not the base path or under it
+# (KIA PULSE and three other apps share the host, D-061), named with its path, never its value.
 fetch() {
     local out headers line lower name path
     out="$(curl -sS --max-time 20 -b "laravel_maintenance=$BYPASS_COOKIE" -D - -o /dev/null -w 'HTTP_CODE=%{http_code}' "$1" 2>/dev/null || true)"
@@ -395,6 +398,7 @@ fetch() {
     esac
     HTTP_CODE="${HTTP_CODE:-000}"
     HTTP_LOCATION=""
+    HTTP_CONTENT_TYPE=""
     BAD_COOKIES=""
     while IFS= read -r line; do
         line="${line%$'\r'}"
@@ -403,6 +407,10 @@ fetch() {
             location:*)
                 HTTP_LOCATION="${line#*:}"
                 HTTP_LOCATION="${HTTP_LOCATION# }"
+                ;;
+            content-type:*)
+                HTTP_CONTENT_TYPE="${lower#*:}"
+                HTTP_CONTENT_TYPE="${HTTP_CONTENT_TYPE# }"
                 ;;
             set-cookie:*)
                 name="${line#*:}"
@@ -449,9 +457,17 @@ root_hint() {
 # PULSE's approach; `down --secret`'s /<secret> address does not work under a base path): the
 # prerendered 503 page and the middleware both accept it, whatever the path.
 serving_check() {
-    local live_url
+    local live_url http_url
     live_url="$(app_config app.url)"
     live_url="${live_url%/}"
+    case "$live_url" in
+        https://*) http_url="http://${live_url#https://}" ;;
+        *)
+            echo "" >&2
+            echo "✗ APP_URL ($live_url) is not an https:// address (D-061, D-062)." >&2
+            exit 1
+            ;;
+    esac
     SERVED_BASE_PATH="$(app_config hub.base_path)"
     BYPASS_COOKIE="$("$PHP" scripts/maintenance-bypass-cookie.php "$BYPASS_VALUE")"
 
@@ -503,6 +519,31 @@ serving_check() {
     fi
     check_cookies "$live_url/api/v1/health"
     echo "  $live_url/api/v1/health answered 401 without a key, as it must."
+
+    # HTTPS only (D-062): a page over plain HTTP is redirected to the same address over HTTPS
+    # (public/.htaccess); the API answers 403 in its own JSON format, never a redirect.
+    fetch "$http_url/"
+    if [ "$HTTP_CODE" != "301" ] || [ "$HTTP_LOCATION" != "$live_url/" ]; then
+        echo "" >&2
+        echo "✗ $http_url/ answered $HTTP_CODE${HTTP_LOCATION:+ to $HTTP_LOCATION}; expected 301 to $live_url/ (HTTPS only, D-062)." >&2
+        echo "  public/.htaccess must redirect plain HTTP to HTTPS (hub:preflight checks the rule)." >&2
+        exit 1
+    fi
+    check_cookies "$http_url/"
+    echo "  $http_url/ answered 301 to $live_url/."
+    fetch "$http_url/api/v1/health"
+    if [ "$HTTP_CODE" != "403" ] || [ "${HTTP_CONTENT_TYPE%%;*}" != "application/json" ]; then
+        echo "" >&2
+        echo "✗ $http_url/api/v1/health answered $HTTP_CODE (${HTTP_CONTENT_TYPE:-no content type}); expected the API's 403 (JSON) over plain HTTP (D-062)." >&2
+        case "$HTTP_CODE" in
+            301|302) echo "  A redirect means the HTTPS rule in public/.htaccess catches the API: it must leave ^api/ alone." >&2 ;;
+            401) echo "  401 means the call was taken as HTTPS or APP_ENV is not production." >&2 ;;
+            403|406) echo "  A 403 or 406 that is not JSON comes from in front of the hub (Imunify360): stop and report to AOS." >&2 ;;
+        esac
+        exit 1
+    fi
+    check_cookies "$http_url/api/v1/health"
+    echo "  $http_url/api/v1/health answered 403 over plain HTTP, as it must."
     if [ -n "$SERVED_BASE_PATH" ]; then
         echo "  No cookie outside $SERVED_BASE_PATH."
     fi

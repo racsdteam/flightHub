@@ -2,7 +2,7 @@
 #
 # RAC Flight Data Hub — restore check (D-047). Runbook: docs/DEPLOY.md.
 #
-#   scripts/restore-check.sh /home/sysrac/backups/flighthub/flighthub-<stamp>.sql.gz
+#   scripts/restore-check.sh /home/sysrac/flight-hub-backups/flighthub-<stamp>.sql.gz
 #
 # Loads a dump made by scripts/backup.sh into a SCRATCH database and compares the row count of every
 # table, and the trigger count, with the dump's manifest. Exit 0 when everything matches.

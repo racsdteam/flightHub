@@ -85,7 +85,7 @@ class BackupScriptTest extends TestCase
             'STUB_LOG' => $this->dir.'/log',
             'STUB_DIR' => $this->dir,
             'FLIGHTHUB_APP_DIR' => $this->dir.'/app',
-            'FLIGHTHUB_BACKUP_DIR' => $this->dir.'/backups/flighthub',
+            'FLIGHTHUB_BACKUP_DIR' => $this->dir.'/flight-hub-backups',
             'FLIGHTHUB_BACKUP_CNF' => $this->dir.'/home/.flighthub-backup.cnf',
             'FLIGHTHUB_RESTORE_CNF' => $this->dir.'/home/.flighthub-restore.cnf',
             'FLIGHTHUB_MYSQLDUMP' => $this->dir.'/bin/mysqldump',
@@ -118,7 +118,7 @@ class BackupScriptTest extends TestCase
         $run = $this->script('backup.sh');
 
         $this->assertTrue($run->isSuccessful(), $run->getErrorOutput());
-        $dumps = glob($this->dir.'/backups/flighthub/flighthub-*.sql.gz');
+        $dumps = glob($this->dir.'/flight-hub-backups/flighthub-*.sql.gz');
         $this->assertCount(1, $dumps);
         $manifest = $this->manifest(substr($dumps[0], 0, -7).'.manifest');
         $this->assertSame(basename($dumps[0]), $manifest['file']);
@@ -135,12 +135,34 @@ class BackupScriptTest extends TestCase
         $this->assertStringEndsWith(' sysrac_flighthub', $call);
         $this->assertDoesNotMatchRegularExpression('/(^| )(-p|--password)/', $call);
         $this->assertSame('0600', substr(sprintf('%o', fileperms($dumps[0])), -4));
-        $this->assertSame('0700', substr(sprintf('%o', fileperms($this->dir.'/backups/flighthub')), -4));
+        $this->assertSame('0700', substr(sprintf('%o', fileperms($this->dir.'/flight-hub-backups')), -4));
+    }
+
+    /**
+     * Batch 7d (A1): /home/sysrac/backups belongs to root, so the folder is
+     * /home/sysrac/flight-hub-backups, beside the app; created mode 700 when missing.
+     */
+    public function test_the_folder_is_beside_the_app_and_a_folder_that_cannot_be_created_is_refused(): void
+    {
+        $this->assertStringContainsString('DIR="${FLIGHTHUB_BACKUP_DIR:-/home/sysrac/flight-hub-backups}"', File::get(base_path('scripts/backup.sh')));
+        foreach (['scripts/backup.sh', 'scripts/restore-check.sh', '.env.example'] as $file) {
+            $this->assertStringNotContainsString('/home/sysrac/backups/flighthub', File::get(base_path($file)), $file);
+        }
+
+        File::makeDirectory($this->dir.'/locked', 0500);
+        try {
+            $run = $this->script('backup.sh', env: ['FLIGHTHUB_BACKUP_DIR' => $this->dir.'/locked/flight-hub-backups']);
+        } finally {
+            chmod($this->dir.'/locked', 0700);
+        }
+        $this->assertSame(1, $run->getExitCode());
+        $this->assertStringContainsString('backup.sh: cannot create the backup folder '.$this->dir.'/locked/flight-hub-backups', $run->getErrorOutput());
+        $this->assertDirectoryDoesNotExist($this->dir.'/locked/flight-hub-backups');
     }
 
     public function test_only_the_14_newest_dumps_are_kept(): void
     {
-        $dir = $this->dir.'/backups/flighthub';
+        $dir = $this->dir.'/flight-hub-backups';
         File::makeDirectory($dir, 0700, true);
         for ($day = 1; $day <= 15; $day++) {
             $stamp = sprintf('202610%02dT013000Z', $day);
@@ -165,7 +187,7 @@ class BackupScriptTest extends TestCase
         $run = $this->script('backup.sh', env: ['STUB_DUMP_FAIL' => '1']);
 
         $this->assertFalse($run->isSuccessful());
-        $this->assertSame([], glob($this->dir.'/backups/flighthub/flighthub-*'));
+        $this->assertSame([], glob($this->dir.'/flight-hub-backups/flighthub-*'));
     }
 
     public function test_the_credentials_file_must_be_mode_600_and_outside_the_repository(): void
@@ -186,7 +208,7 @@ class BackupScriptTest extends TestCase
     public function test_the_restore_check_loads_into_the_scratch_database_and_compares_the_counts(): void
     {
         $this->script('backup.sh');
-        $dump = glob($this->dir.'/backups/flighthub/flighthub-*.sql.gz')[0];
+        $dump = glob($this->dir.'/flight-hub-backups/flighthub-*.sql.gz')[0];
 
         $run = $this->script('restore-check.sh', [$dump]);
 
@@ -205,7 +227,7 @@ class BackupScriptTest extends TestCase
     public function test_the_restore_check_refuses_the_production_database_and_a_damaged_dump(): void
     {
         $this->script('backup.sh');
-        $dump = glob($this->dir.'/backups/flighthub/flighthub-*.sql.gz')[0];
+        $dump = glob($this->dir.'/flight-hub-backups/flighthub-*.sql.gz')[0];
 
         foreach (['sysrac_flighthub' => 'is the production database', 'sysrac_other' => "must contain 'restore' or 'scratch'"] as $db => $message) {
             $run = $this->script('restore-check.sh', [$dump], ['FLIGHTHUB_RESTORE_DB' => $db]);

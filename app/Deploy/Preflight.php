@@ -37,6 +37,13 @@ final class Preflight
     /** cPanel's per-directory handler line in public/.htaccess (the account's default PHP is 8.2). */
     public const HTACCESS_HANDLER = 'AddHandler application/x-httpd-ea-php83 .php .php8 .phtml';
 
+    /** D-062: public/.htaccess redirects plain HTTP to HTTPS, never the API (three lines, in order). */
+    public const HTACCESS_HTTPS_RULE = [
+        'RewriteCond %{HTTPS} !=on',
+        'RewriteCond %{HTTP:X-Forwarded-SSL} !on',
+        'RewriteRule !^api/ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]',
+    ];
+
     /** Written every minute by the scheduler (routes/console.php), also in maintenance mode. */
     public const HEARTBEAT_KEY = 'hub.scheduler_heartbeat';
 
@@ -118,6 +125,15 @@ final class Preflight
         $lines = array_map('trim', preg_split('/\R/', (string) $this->probe->htaccess()) ?: []);
         $this->check('public/.htaccess sets the ea-php83 handler', in_array(self::HTACCESS_HANDLER, $lines, true));
         $this->check('public/.htaccess has DirectoryIndex index.php', in_array('DirectoryIndex index.php', $lines, true));
+        $this->check('public/.htaccess redirects plain HTTP to HTTPS, not the API', function () use ($lines) {
+            foreach (array_keys($lines, self::HTACCESS_HTTPS_RULE[0], true) as $i) {
+                if (array_slice($lines, $i, 3) === self::HTACCESS_HTTPS_RULE) {
+                    return true;
+                }
+            }
+
+            return false;
+        });
     }
 
     private function requiredKeys(): void

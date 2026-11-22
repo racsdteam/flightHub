@@ -22,6 +22,10 @@ info:
 
         Authorization: Bearer fdh_xxxxxxxx_…
 
+    Call over HTTPS only. A call over plain HTTP is refused with `403 HTTPS_REQUIRED` before
+    the key is read, and is never redirected: a client configured with `http://` fails at once
+    instead of sending its key in clear on every call.
+
     Never put the key in the URL: a key in the query string is ignored (and URLs end up in
     logs and browser histories). A missing, malformed, unknown, revoked or expired key, or a
     disabled consumer, always gets the same answer: `401 {"error": "UNAUTHORIZED"}`.
@@ -133,7 +137,8 @@ info:
     ## Errors
 
     Every error is JSON `{"error": CODE, "message": text}`, never a stack trace:
-    `UNAUTHORIZED` (401), `NOT_FOUND` (404: an unknown flight or path), `METHOD_NOT_ALLOWED`
+    `UNAUTHORIZED` (401), `HTTPS_REQUIRED` (403: the call came over plain HTTP),
+    `NOT_FOUND` (404: an unknown flight or path), `METHOD_NOT_ALLOWED`
     (405: any method other than GET or HEAD, with an `Allow` header), `INVALID_PARAMETER`
     (422), `RATE_LIMITED` (429), `SERVER_ERROR` (500).
 
@@ -386,6 +391,8 @@ paths:
                       requestedAsOf: null
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/HttpsRequired'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
         '422':
@@ -556,6 +563,8 @@ paths:
                       feed: ok
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/HttpsRequired'
         '404':
           description: No flight has this AODB id.
           content:
@@ -701,6 +710,8 @@ paths:
                       headCursor: 59
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/HttpsRequired'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
         '422':
@@ -746,6 +757,8 @@ paths:
                       feed: ok
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/HttpsRequired'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
         '429':
@@ -831,6 +844,15 @@ components:
           examples:
             unauthorized:
               value: {error: UNAUTHORIZED, message: A valid API key is required.}
+    HttpsRequired:
+      description: 'The call came over plain HTTP. Refused before the key is read, never redirected; logged without a consumer.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            httpsRequired:
+              value: {error: HTTPS_REQUIRED, message: HTTPS required.}
     NotFound:
       description: Unknown path under /api/v1.
       content:
@@ -1528,10 +1550,10 @@ components:
       additionalProperties: false
       properties:
         error:
-          description: 'The error code: UNAUTHORIZED, NOT_FOUND, METHOD_NOT_ALLOWED, INVALID_PARAMETER, RATE_LIMITED, SERVER_ERROR (or HTTP_<status> for another refusal by the web server layer).'
+          description: 'The error code: UNAUTHORIZED, HTTPS_REQUIRED, NOT_FOUND, METHOD_NOT_ALLOWED, INVALID_PARAMETER, RATE_LIMITED, SERVER_ERROR (or HTTP_<status> for another refusal by the web server layer).'
           type: string
           anyOf:
-            - enum: [UNAUTHORIZED, NOT_FOUND, METHOD_NOT_ALLOWED, INVALID_PARAMETER, RATE_LIMITED, SERVER_ERROR]
+            - enum: [UNAUTHORIZED, HTTPS_REQUIRED, NOT_FOUND, METHOD_NOT_ALLOWED, INVALID_PARAMETER, RATE_LIMITED, SERVER_ERROR]
             - pattern: '^HTTP_[0-9]{3}$'
         message:
           description: A short explanation, for people.

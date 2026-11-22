@@ -5,7 +5,7 @@ info:
   version: 1.0.0
   description: |-
     Flight data of Kigali International Airport (HRYR).
-    Send your key as `Authorization: Bearer <key>`. Times are UTC (ISO 8601).
+    Call over HTTPS and send your key as `Authorization: Bearer <key>`. Times are UTC (ISO 8601).
     You receive only the fields your key allows.
 security:
   - apiKey: []
@@ -60,6 +60,7 @@ paths:
                       feed: ok
                       window: {from: '2026-10-28T22:00:00Z', to: '2026-10-29T22:00:00Z'}
         '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/HttpsRequired'}
         '422': {$ref: '#/components/responses/Invalid'}
         '429': {$ref: '#/components/responses/TooMany'}
   /flights/{id}:
@@ -142,6 +143,7 @@ paths:
                         source: system
                     meta: {asOf: '2026-10-29T07:42:30Z', feed: ok}
         '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/HttpsRequired'}
         '404': {$ref: '#/components/responses/NotFound'}
         '422': {$ref: '#/components/responses/Invalid'}
         '429': {$ref: '#/components/responses/TooMany'}
@@ -166,6 +168,9 @@ components:
   responses:
     Unauthorized:
       description: Missing, wrong or disabled key.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    HttpsRequired:
+      description: The call did not use HTTPS.
       content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
     NotFound:
       description: No flight with this id.
