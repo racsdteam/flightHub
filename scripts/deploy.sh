@@ -178,7 +178,7 @@ dry_run() {
 scripts/deploy.sh --dry-run: the steps of a deploy (nothing is run).
 
   Preconditions (all before maintenance; any refusal changes nothing):
-    · not root; PHP 8.3.x at $PHP; curl; pgrep; composer (FLIGHTHUB_COMPOSER) runs with that PHP
+    · not root; PHP 8.3.x at $PHP; curl; composer (FLIGHTHUB_COMPOSER) runs with that PHP
     · origin is github-flighthub:… (the deploy key); the git working tree is clean
     · git fetch; TARGET = the upstream commit; HEAD is TARGET or its ancestor
     · FLIGHTHUB_DEPLOY_AUTHORIZED equals DEPLOY_AUTHORISATION in TARGET:scripts/deploy.sh
@@ -186,13 +186,15 @@ scripts/deploy.sh --dry-run: the steps of a deploy (nothing is run).
     · if TARGET's scripts/deploy.sh differs from HEAD's: run that version once, from a copy in
       $DEPLOY_DIR, for the same TARGET (before maintenance and before the DDL prompt)
     · FLIGHTHUB_DB_DDL_USER set; FLIGHTHUB_DB_DDL_PASSWORD from the environment or typed once (not echoed)
-    · the DDL login works with the code on disk (hub:preflight --ddl-login)
+    · the DDL login works with the code on disk (hub:preflight --ddl-login); hub:jobs exists there
 
   Every deploy after the first (vendor/ exists):
   1. Maintenance     artisan down --render="errors::503" --retry=15 --secret=<random, this deploy only>
                      (from here any failure leaves maintenance on and says what changed)
-  2. Running jobs    wait up to ${JOB_WAIT_SECONDS} s for hub:poll / hub:reapply-corrections / hub:backfill;
-                     still running: artisan up, nothing changed, stop
+  2. Running jobs    artisan hub:jobs every 2 s, up to ${JOB_WAIT_SECONDS} s, until no other connection of the
+                     runtime database user to the hub's database remains (a poll, re-apply or backfill;
+                     jailshell hides cron's processes from pgrep); still connected: artisan up,
+                     nothing changed, stop
   3. Update code     git merge --ff-only TARGET (the commit whose token was checked; never a pull)
   4. Dependencies    composer install --no-dev --optimize-autoloader --no-interaction
   5. Config cache    artisan config:clear (so the DDL prefix below reaches the config)
@@ -211,7 +213,7 @@ scripts/deploy.sh --dry-run: the steps of a deploy (nothing is run).
  12. Up              artisan up
 
   First install (no vendor/, nothing live): update code (git merge --ff-only TARGET) →
-  composer install → DDL login → maintenance → running jobs → 5 to 12 above.
+  composer install → DDL login → maintenance → 5 to 12 above (no running-jobs wait: nothing runs yet).
 STEPS
 }
 
@@ -245,7 +247,6 @@ preconditions() {
     version="$("$PHP" -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')" || refuse "PHP at $PHP does not run."
     [ "$version" = "8.3" ] || refuse "PHP 8.3 is required; $PHP is $version."
     command -v curl >/dev/null 2>&1 || refuse "curl is required for the serving check."
-    command -v pgrep >/dev/null 2>&1 || refuse "pgrep is not available: the running-jobs wait needs pgrep."
     if [ -z "$COMPOSER_BIN" ]; then
         COMPOSER_BIN="$(command -v composer || true)"
     fi
@@ -333,6 +334,9 @@ BLOCKED
     if [ -f "$APP_DIR/vendor/autoload.php" ]; then
         # A wrong password is found now, with the code on disk, not at the migrations.
         ddl_login >/dev/null || refuse "The DDL login failed with these credentials (hub:preflight --ddl-login)."
+        # The running-jobs wait runs hub:jobs from the code on disk (the target is not there yet).
+        "$PHP" artisan help hub:jobs >/dev/null 2>&1 \
+            || refuse "The code on disk has no hub:jobs (it predates Batch 7e), so the running-jobs wait cannot run."
     else
         FIRST_INSTALL="yes"
     fi
@@ -360,30 +364,50 @@ maintenance_on() {
 
 # A poll, re-apply or backfill that started before maintenance may still be writing; the scheduler
 # starts none in maintenance mode. No file changes until it has finished.
+#
+# Through the database, not the process list: cPanel's jailshell does not show cron's processes,
+# so pgrep sees nothing while a poll runs (Batch 7e). hub:jobs counts the other connections of
+# the runtime database user to the hub's database; in maintenance (down --render) web requests
+# are answered before PHP connects, so those are CLI jobs (the heartbeat only for a moment).
+# Exit 0: none; 1: some; anything else: the process list could not be read.
 wait_for_jobs() {
     step "Waiting for running jobs"
-    local waited=0
-    while pgrep -u "$(id -u)" -f "artisan'? hub:(poll|reapply-corrections|backfill)" >/dev/null 2>&1; do
+    local waited=0 code out
+    while :; do
+        code=0
+        out="$("$PHP" artisan hub:jobs 2>&1)" || code=$?
+        case "$code" in
+            0) break ;;
+            1) ;;
+            *)
+                echo "" >&2
+                echo "✗ hub:jobs could not read the database's process list (exit $code)." >&2
+                lift_maintenance_unchanged
+                ;;
+        esac
         if [ "$waited" -ge "$JOB_WAIT_SECONDS" ]; then
             echo "" >&2
-            echo "✗ A hub:poll, hub:reapply-corrections or hub:backfill is still running after ${JOB_WAIT_SECONDS} s." >&2
-            "$PHP" artisan up >/dev/null
-            trap - EXIT
-            if [ "$FILES_CHANGED" = "yes" ]; then
-                echo "  First install: nothing is live and the database has not been touched; maintenance has been lifted." >&2
-            else
-                echo "  NOTHING has been changed (code and database as before); maintenance has been lifted." >&2
-            fi
-            echo "  Re-run scripts/deploy.sh when the job has finished." >&2
-            exit 1
+            echo "✗ A job (hub:poll, hub:reapply-corrections, hub:backfill) still holds a database connection after ${JOB_WAIT_SECONDS} s:" >&2
+            printf '%s\n' "$out" | sed 's/^/    /' >&2
+            lift_maintenance_unchanged
         fi
         if [ "$waited" -eq 0 ]; then
-            echo "  A poll, re-apply or backfill is running: waiting for it (up to ${JOB_WAIT_SECONDS} s)."
+            echo "  A job is connected to the hub's database: waiting for it (hub:jobs every 2 s, up to ${JOB_WAIT_SECONDS} s)."
+            printf '%s\n' "$out" | sed 's/^/    /'
         fi
-        sleep 1
-        waited=$((waited + 1))
+        sleep 2
+        waited=$((waited + 2))
     done
-    echo "  No job running."
+    echo "  No other connection to the hub's database: no job is running."
+}
+
+# The wait failed: maintenance is lifted at once, because nothing has changed yet.
+lift_maintenance_unchanged() {
+    "$PHP" artisan up >/dev/null
+    trap - EXIT
+    echo "  NOTHING has been changed (code and database as before); maintenance has been lifted." >&2
+    echo "  Re-run scripts/deploy.sh when the job has finished." >&2
+    exit 1
 }
 
 # One request through the web server with the bypass cookie. Sets HTTP_CODE, HTTP_LOCATION,
@@ -568,7 +592,7 @@ main() {
         step "DDL login (first install)"
         ddl_login >/dev/null || refuse "The DDL login failed with these credentials (hub:preflight --ddl-login)."
         maintenance_on
-        wait_for_jobs
+        echo "  First install: no job runs yet (no cron), so there is no running-jobs wait."
     else
         maintenance_on
         wait_for_jobs

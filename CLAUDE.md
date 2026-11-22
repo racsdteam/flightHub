@@ -46,15 +46,24 @@ subdomain is bought, D-061), credentials.
   script for that deploy (D-049). Order (D-056): every check first (fetch; TARGET = the
   upstream commit; HEAD is TARGET or its ancestor; the token read from TARGET:scripts/deploy.sh;
   a changed deploy.sh re-run once from a copy, for the same TARGET; the DDL password asked once;
-  the DDL login) → maintenance on, before any file changes → wait (≤ 120 s) for a running
-  hub:poll / reapply / backfill → git merge --ff-only TARGET (never a pull) → composer install →
-  config:clear → migrations (DDL) → grants → re-apply → caches (route cache only when the base
-  path is empty) → serving check (APP_URL, APP_URL/, APP_URL/api/v1/health; over plain HTTP the
-  page → 301 to HTTPS and the API → 403; no cookie outside the base path) → preflight → up.
-  deploy.sh refuses before maintenance when pgrep (the running-jobs wait) is missing.
-  First install (no vendor/, nothing live): code and composer first, then the DDL login and
-  maintenance. First deploy only: create the first admin with php artisan
-  hub:admin-create {email} {name} --role=admin (temporary password printed once).
+  the DDL login; hub:jobs exists in the code on disk) → maintenance on, before any file changes →
+  wait (≤ 120 s) for a running hub:poll / reapply / backfill → git merge --ff-only TARGET (never
+  a pull) → composer install → config:clear → migrations (DDL) → grants → re-apply → caches
+  (route cache only when the base path is empty) → serving check (APP_URL, APP_URL/,
+  APP_URL/api/v1/health; over plain HTTP the page → 301 to HTTPS and the API → 403; no cookie
+  outside the base path) → preflight → up.
+- The running-jobs wait goes through the database, never the process list: cPanel's jailshell
+  does not show cron's processes, so pgrep sees nothing while a poll runs (checked on the server,
+  22 Nov). php artisan hub:jobs (runtime connection) counts the OTHER connections of the runtime
+  user to the hub's database (information_schema.PROCESSLIST; no grant needed: a user sees its
+  own threads) and prints only their time and command, never the query text, host or user; exit 0
+  none, 1 some, 2 unreadable. deploy.sh runs it every 2 s after down (maintenance answers web
+  requests before PHP connects, so the connections left are CLI jobs); still connected after
+  FLIGHTHUB_JOB_WAIT_SECONDS (120) or unreadable: artisan up, nothing changed, stop.
+- First install (no vendor/, nothing live): code and composer first, then the DDL login and
+  maintenance; no running-jobs wait (nothing runs yet). First deploy only: create the first
+  admin with php artisan hub:admin-create {email} {name} --role=admin (temporary password
+  printed once).
 - The DDL password is typed at deploy.sh's prompt (read -s) or taken from the operator's
   environment (FLIGHTHUB_DB_DDL_PASSWORD): never stored, never in .env, never in a file, never
   cached (the config cache never holds it). It reaches only artisan migrate, hub:grants-sql and

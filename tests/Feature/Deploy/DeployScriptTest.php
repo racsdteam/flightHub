@@ -7,8 +7,8 @@ use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
 /**
- * scripts/deploy.sh (Batch 7, order of D-056), run by bash against stub php, git, curl, pgrep
- * and composer that log every call (and whether DB_DDL_PASSWORD was in its environment, never
+ * scripts/deploy.sh (Batch 7, order of D-056), run by bash against stub php, git, curl and
+ * composer that log every call (and whether DB_DDL_PASSWORD was in its environment, never
  * its value). A copy of the script carries a test token; the committed script is run as it is
  * for the refusal.
  */
@@ -76,6 +76,19 @@ class DeployScriptTest extends TestCase
                   hub:preflight) if [ "${2:-}" = "--ddl-login" ]; then [ "${STUB_DDL_LOGIN:-ok}" = ok ]; exit $?; fi; [ "${STUB_PREFLIGHT:-ok}" = ok ] ;;
                   down) [ "${STUB_DOWN:-ok}" = ok ] ;;
                   migrate) [ "${STUB_MIGRATE:-ok}" = ok ] ;;
+                  help) [ -z "${STUB_NO_JOBS_COMMAND:-}" ] ;;
+                  hub:jobs)
+                    # STUB_JOBS: how many more checks still find a job connected ("forever": always;
+                    # "error": the process list cannot be read).
+                    n="$(cat "$STUB_DIR/jobs" 2>/dev/null || echo "${STUB_JOBS:-0}")"
+                    [ "$n" = error ] && { echo "hub:jobs: could not read the process list of the runtime database connection." >&2; exit 2; }
+                    if [ "$n" = forever ] || [ "$n" -gt 0 ]; then
+                      [ "$n" = forever ] || echo $((n - 1)) > "$STUB_DIR/jobs"
+                      echo "hub:jobs: 1 other connection of the runtime database user to the hub's database:"
+                      echo "  time 4 s, command Execute"
+                      exit 1
+                    fi
+                    echo "hub:jobs: 0 other connections of the runtime database user to the hub's database." ;;
                 esac ;;
               *maintenance-bypass-cookie.php) echo "php bypass-cookie $2 ddl=$ddl" >> "$STUB_LOG"; printf 'BYPASSCOOKIE' ;;
               *)
@@ -136,15 +149,6 @@ class DeployScriptTest extends TestCase
             for c in "${cookies[@]}"; do [ -n "$c" ] && printf 'Set-Cookie: %s\r\n' "$c"; done
             printf '\r\n'
             printf 'HTTP_CODE=%s' "$code"
-            SH);
-        $this->stub('pgrep', <<<'SH'
-            #!/bin/bash
-            echo "pgrep $*" >> "$STUB_LOG"
-            # STUB_JOBS: how many more checks still find a running job (always, with "forever").
-            n="$(cat "$STUB_DIR/jobs" 2>/dev/null || echo "${STUB_JOBS:-0}")"
-            [ "$n" = forever ] && exit 0
-            [ "$n" -gt 0 ] && { echo $((n - 1)) > "$STUB_DIR/jobs"; exit 0; }
-            exit 1
             SH);
     }
 
@@ -312,10 +316,10 @@ class DeployScriptTest extends TestCase
             'artisan up ddl=no',
         ]);
         $this->assertSame('artisan up ddl=no', end($log));
-        // Running jobs are checked after down and before the code changes.
-        $pgrep = array_search(self::grep($log, '/^pgrep -u \d+ -f /')[0], $log, true);
-        $this->assertTrue(self::index($log, self::DOWN) < $pgrep && $pgrep < self::index($log, self::MERGE));
-        $this->assertStringContainsString("artisan'? hub:(poll|reapply-corrections|backfill)", $log[$pgrep]);
+        // Running jobs are checked through the database after down and before the code changes;
+        // hub:jobs was found in the code on disk before maintenance.
+        self::assertInOrder($log, ['artisan help hub:jobs ddl=no', self::DOWN, 'artisan hub:jobs ddl=no', self::MERGE]);
+        $this->assertStringContainsString("No other connection to the hub's database: no job is running.", $run['out']);
         $this->assertSame([], self::grep($log, '/^git pull/'));
 
         // Caches: cleared, then built; no route cache under /flighthub (D-061); never optimize:clear or cache:clear.
@@ -375,6 +379,9 @@ class DeployScriptTest extends TestCase
         self::assertInOrder($run['log'], [self::MERGE, self::COMPOSER, 'artisan hub:preflight --ddl-login ddl=yes', self::DOWN, 'artisan config:clear ddl=no', 'artisan migrate --database=mariadb_ddl --force ddl=yes']);
         $this->assertCount(1, self::grep($run['log'], '/^git merge /'));
         $this->assertCount(1, self::grep($run['log'], '/^php composer install/'));
+        // Nothing runs yet: no running-jobs wait (and no hub:jobs check before maintenance).
+        $this->assertSame([], self::grep($run['log'], '/hub:jobs/'));
+        $this->assertStringContainsString('First install: no job runs yet (no cron), so there is no running-jobs wait.', $run['out']);
     }
 
     public function test_a_changed_deploy_script_is_re_run_once_before_maintenance_and_the_ddl_prompt_for_the_same_target(): void
@@ -405,13 +412,22 @@ class DeployScriptTest extends TestCase
         $this->assertStringNotContainsString(self::DDL_PASSWORD, $run['out']);
     }
 
-    public function test_a_running_job_is_waited_for(): void
+    /**
+     * Batch 7e: the wait goes through the database (hub:jobs), every 2 s: it waits while hub:jobs
+     * exits 1 and goes on at 0, with no file change before.
+     */
+    public function test_a_running_job_is_waited_for_through_the_database(): void
     {
-        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'STUB_JOBS' => '2', 'FLIGHTHUB_JOB_WAIT_SECONDS' => '5'], stdin: "\n");
+        $started = microtime(true);
+        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'STUB_JOBS' => '2', 'FLIGHTHUB_JOB_WAIT_SECONDS' => '10'], stdin: "\n");
 
         $this->assertSame(0, $run['code'], $run['out']);
-        $this->assertStringContainsString('A poll, re-apply or backfill is running: waiting for it (up to 5 s).', $run['out']);
-        $this->assertCount(3, self::grep($run['log'], '/^pgrep/'));
+        $this->assertStringContainsString("A job is connected to the hub's database: waiting for it (hub:jobs every 2 s, up to 10 s).", $run['out']);
+        $this->assertStringContainsString('    time 4 s, command Execute', $run['out']);
+        $this->assertCount(3, self::grep($run['log'], '/^artisan hub:jobs/'));
+        $this->assertGreaterThanOrEqual(4.0, microtime(true) - $started, 'two waits of 2 s');
+        $jobs = array_keys(preg_grep('/^artisan hub:jobs/', $run['log']));
+        $this->assertTrue(self::index($run['log'], self::DOWN) < $jobs[0] && end($jobs) < self::index($run['log'], self::MERGE));
     }
 
     public function test_the_wait_for_jobs_timeout_lifts_maintenance_and_changes_nothing(): void
@@ -419,11 +435,27 @@ class DeployScriptTest extends TestCase
         $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'STUB_JOBS' => 'forever', 'FLIGHTHUB_JOB_WAIT_SECONDS' => '2']);
 
         $this->assertSame(1, $run['code']);
-        $this->assertStringContainsString('still running after 2 s', $run['out']);
+        $this->assertStringContainsString('still holds a database connection after 2 s', $run['out']);
         $this->assertStringContainsString('NOTHING has been changed (code and database as before); maintenance has been lifted.', $run['out']);
-        self::assertInOrder($run['log'], [self::DOWN, 'artisan up ddl=no']);
+        self::assertInOrder($run['log'], [self::DOWN, 'artisan hub:jobs ddl=no', 'artisan up ddl=no']);
+        $this->assertCount(2, self::grep($run['log'], '/^artisan hub:jobs/'));
         $this->assertSame([], self::grep($run['log'], '/^(git merge |php composer install|artisan migrate|artisan config:clear)/'));
         $this->assertStringNotContainsString('DEPLOY FAILED', $run['out']);
+    }
+
+    /**
+     * hub:jobs cannot read the process list: as for the timeout, maintenance is lifted at once,
+     * because nothing has changed.
+     */
+    public function test_an_unreadable_process_list_lifts_maintenance_and_changes_nothing(): void
+    {
+        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'STUB_JOBS' => 'error']);
+
+        $this->assertSame(1, $run['code']);
+        $this->assertStringContainsString("hub:jobs could not read the database's process list (exit 2).", $run['out']);
+        $this->assertStringContainsString('NOTHING has been changed', $run['out']);
+        self::assertInOrder($run['log'], [self::DOWN, 'artisan hub:jobs ddl=no', 'artisan up ddl=no']);
+        $this->assertSame([], self::grep($run['log'], '/^(git merge |php composer install|artisan migrate)/'));
     }
 
     public function test_a_failed_serving_check_leaves_maintenance_on_and_names_both_commits(): void
@@ -588,26 +620,16 @@ class DeployScriptTest extends TestCase
     }
 
     /**
-     * C1: the running-jobs wait needs pgrep; without it the deploy is refused before maintenance.
+     * The wait runs hub:jobs from the code on disk: code without it is refused before maintenance.
      */
-    public function test_a_missing_pgrep_is_refused_before_maintenance(): void
+    public function test_code_on_disk_without_hub_jobs_is_refused_before_maintenance(): void
     {
-        // The system's tools without pgrep (and no pgrep stub).
-        File::delete($this->dir.'/bin/pgrep');
-        File::makeDirectory($this->dir.'/sys');
-        foreach ([...glob('/usr/bin/*'), ...glob('/bin/*')] as $tool) {
-            $name = basename($tool);
-            if ($name !== 'pgrep' && ! file_exists($this->dir.'/sys/'.$name) && ! file_exists($this->dir.'/bin/'.$name)) {
-                symlink($tool, $this->dir.'/sys/'.$name);
-            }
-        }
-
-        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'PATH' => $this->dir.'/bin:'.$this->dir.'/sys']);
+        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'STUB_NO_JOBS_COMMAND' => '1']);
 
         $this->assertSame(1, $run['code'], $run['out']);
-        $this->assertStringContainsString('pgrep is not available: the running-jobs wait needs pgrep.', $run['out']);
+        $this->assertStringContainsString('The code on disk has no hub:jobs (it predates Batch 7e), so the running-jobs wait cannot run.', $run['out']);
         $this->assertStringContainsString('Nothing has been changed', $run['out']);
-        $this->assertSame([], self::grep($run['log'], '/^(git (fetch|merge )|artisan)/'));
+        $this->assertSame([], self::grep($run['log'], '/^(artisan (down|hub:jobs|migrate)|git merge )/'));
     }
 
     public function test_a_dirty_tree_a_wrong_remote_or_php_refuse_before_anything(): void
