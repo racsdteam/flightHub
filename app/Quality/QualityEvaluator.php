@@ -15,9 +15,35 @@ use Illuminate\Support\Facades\DB;
  * true again → open + reopened, and a resolution "fixed" is reset (the fix
  * did not hold) while other resolutions are kept. Open flags of flights that
  * left the feed are cleared. Flags are never deleted.
+ *
+ * A poll and a re-apply never run the rules at the same time: both go through
+ * evaluateLocked(), under GET_LOCK('flighthub_quality'). Flights known only
+ * from the backfill (current version cause backfill, D-046) are not evaluated.
  */
 final class QualityEvaluator
 {
+    public const LOCK = 'flighthub_quality';
+
+    /**
+     * The rules under the quality lock; null when the lock stayed busy for the timeout
+     * (config quality.lock_timeout_seconds unless given).
+     *
+     * @return array{evaluated: int, detected: int, cleared: int, reopened: int}|null
+     */
+    public function evaluateLocked(Window $window, CarbonImmutable $now, ?int $timeout = null): ?array
+    {
+        $timeout ??= (int) config('quality.lock_timeout_seconds', 10);
+        if ((int) DB::selectOne('SELECT GET_LOCK(?, ?) AS l', [self::LOCK, $timeout])->l !== 1) {
+            return null;
+        }
+
+        try {
+            return $this->evaluate($window, $now);
+        } finally {
+            DB::selectOne('SELECT RELEASE_LOCK(?) AS l', [self::LOCK]);
+        }
+    }
+
     /**
      * @return array{evaluated: int, detected: int, cleared: int, reopened: int}
      */
@@ -43,6 +69,10 @@ final class QualityEvaluator
                 ->orWhere(fn ($q) => $q
                     ->whereNull('reference_time')
                     ->where('last_seen_at', '>=', $now->subHours(FlightRules::NO_TIMES_SEEN_HOURS)->format('Y-m-d H:i:s.u'))))
+            // Known only from the backfill (D-046): never evaluated.
+            ->whereNotExists(fn ($q) => $q->from('flight_versions as v')
+                ->whereColumn('v.id', 'flights.current_version_id')
+                ->where('v.cause', 'backfill'))
             ->orderBy('id')
             ->get();
         $counts['evaluated'] = $flights->count();

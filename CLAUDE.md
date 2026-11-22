@@ -40,15 +40,23 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
 ## Production target
 - Laravel 12, PHP 8.3 (/usr/local/bin/ea-php83): no PHP 8.4+ syntax. MariaDB 10.11.19.
   AlmaLinux / cPanel / CloudLinux, dedicated server at AOS.
-- No Node and no SSH on the server. Deploy: maintenance on → git pull → composer install
-  --no-dev → migrate as DDL user → grants (Dany, as root, when tables changed) →
-  php artisan hub:reapply-corrections (whenever reference data changed) → caches (route
-  cache allowed: served at the subdomain root) → preflight → up. First deploy only: create
-  the first admin with php artisan hub:admin-create {email} {name} --role=admin (temporary
-  password printed once).
+- No Node and no SSH on the server. Deploy: scripts/deploy.sh (see docs/DEPLOY.md), in cPanel
+  Terminal as sysrac (D-045), with FLIGHTHUB_DEPLOY_AUTHORIZED = the token Dany commits in the
+  script for that deploy (D-049). First deploy only: create the first admin with php artisan
+  hub:admin-create {email} {name} --role=admin (temporary password printed once).
+- The DDL password is typed at deploy.sh's prompt (read -s) or taken from the operator's
+  environment (FLIGHTHUB_DB_DDL_PASSWORD): never stored, never in .env, never in a file, never
+  cached (the config cache never holds it). It reaches only artisan migrate, hub:grants-sql and
+  hub:preflight, as an assignment prefix; hub:preflight fails if it is in .env or in
+  bootstrap/cache/config.php.
+- hub:preflight prints check names and pass / warn / FAIL / skipped only, never a value.
+  scripts/backup.sh runs nightly (D-047; restore check scripts/restore-check.sh); credentials in
+  mode-600 files outside the repository, passed with --defaults-extra-file.
   No Node anywhere: CSS is hand-written and committed (D-018).
 - cPanel cron runs the scheduler every minute. No daemons, no long-running queue workers.
-  Scheduled commands use withoutOverlapping and finish well inside their interval.
+  Scheduled commands use withoutOverlapping and finish well inside their interval. The
+  scheduler writes a heartbeat every minute, also in maintenance mode (hub:preflight warns after
+  5 minutes).
 - App commands run as the cPanel account user, never root.
 
 ## Database
@@ -114,7 +122,13 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   screens (Reference; reviewer = the signed-in user, reviewed_on = today), no longer by
   migration (D-028's interim path ends). Every change marks "re-apply pending"; the
   scheduled hub:reapply-corrections --if-pending (every 5 minutes) applies it, never inside
-  a web request.
+  a web request, then runs the quality rules (the poll window) while the feed is OK.
+- A poll and a re-apply run the quality rules under GET_LOCK('flighthub_quality', 10); when it
+  is busy, that run skips its quality step (a poll leaves it to the next poll; a re-apply stays
+  pending).
+- Backfill (D-046, hub:backfill, once at go-live): unknown flights only, version 1 with cause
+  backfill and one first_seen event with source backfill; known flights never touched; no
+  field_changed events; never evaluated for quality.
 - GHR contact stripping (D-035): ghrOperatorDetails email, phone, address, zipcode and city
   are removed before a record is stored, compared or put in an event; name and id stay;
   raw responses keep them for 90 days.
@@ -193,7 +207,14 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
 - CSP: default-src 'none'; scripts and styles only from the hub or with the per-request
   nonce; no 'unsafe-eval', no 'unsafe-inline' (Livewire's CSP-safe build). No inline style
   attributes or event handlers in templates; the own scripts are public/js/hub.js (copy,
-  .txt download, dialog focus / Escape) and public/js/api-docs.js (starts Swagger UI on /api/docs).
+  .txt download, dialog focus / Escape, and ended sessions: a Livewire request answered 419
+  goes to /login?session=ended with the page's path, and signing in returns there) and
+  public/js/api-docs.js (starts Swagger UI on /api/docs).
+- Security headers on every response, from the global SecurityHeaders middleware (outermost):
+  nosniff, X-Frame-Options DENY, Referrer-Policy same-origin, Permissions-Policy, HSTS in
+  production; the CSP on HTML responses (the fallback 404 included). The prerendered
+  maintenance page (artisan down --render) is served before the application boots, so it
+  carries only Retry-After.
 - Screen map (each route carries its ability; every Livewire screen re-checks it on every
   request, App\Livewire\AdminPage::boot):
   Feed health /, Flights /flights and /flights/{aodbId}, Quality /quality and

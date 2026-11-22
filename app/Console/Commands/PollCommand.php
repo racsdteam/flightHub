@@ -31,6 +31,8 @@ class PollCommand extends Command
         if (isset($poll['quality'])) {
             $q = $poll['quality'];
             $this->line("hub:poll: quality: {$q['evaluated']} flights evaluated, {$q['detected']} detected, {$q['reopened']} reopened, {$q['cleared']} cleared");
+        } elseif (isset($poll['quality_skipped'])) {
+            $this->line("hub:poll: quality rules not run ({$poll['quality_skipped']})");
         }
 
         // Every handled outcome exits 0 (cron must not mail every minute); it lives in polls.

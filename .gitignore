@@ -25,3 +25,6 @@ Thumbs.db
 .env*
 !.env.example
 /docs/
+# cPanel's MultiPHP INI Editor writes these into the document root (public/) on the server.
+/public/.user.ini
+/public/php.ini

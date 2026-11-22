@@ -8,7 +8,11 @@
         <a href="{{ route('reference.stands') }}" @class(['active' => request()->routeIs('reference.stands')]) @if (request()->routeIs('reference.stands')) aria-current="page" @endif>Stands</a>
     </nav>
     @if (session('status'))<div class="banner banner-ok" role="status"><x-icon name="check-circle" size="20" /><p>{{ session('status') }}</p></div>@endif
-    @if ($pendingSince)<div class="banner banner-warning" role="status"><x-icon name="clock" size="20" /><p>Re-apply pending since <x-time :at="$pendingSince" format="H:i" />: served values update within 5 minutes.</p></div>@endif
+    @if ($pendingSince)
+        {{-- Since when: the time today (Kigali), the date and time when it dates from an earlier day. --}}
+        @php($sinceFormat = \App\Admin\Times::kigali($pendingSince, 'Y-m-d') === \Carbon\CarbonImmutable::now('Africa/Kigali')->format('Y-m-d') ? 'H:i' : 'Y-m-d H:i')
+        <div class="banner banner-warning" role="status"><x-icon name="clock" size="20" /><p>Re-apply pending since <x-time :at="$pendingSince" :format="$sinceFormat" />: served values update within 5 minutes.</p></div>
+    @endif
 
     <section class="card table-card">
         <div class="card-head padded"><h2><x-icon name="layers" size="20" /> {{ $this->title() }}</h2>

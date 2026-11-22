@@ -34,6 +34,9 @@ class ReapplyCorrectionsCommand extends Command
             return self::FAILURE;
         }
 
+        if ($result['retry']) {
+            ReapplyPending::mark();
+        }
         $quality = $result['quality'] === null
             ? "quality rules not run ({$result['quality_skipped']})"
             : "quality: {$result['quality']['evaluated']} flights evaluated, {$result['quality']['detected']} flags detected, {$result['quality']['cleared']} cleared, {$result['quality']['reopened']} reopened";

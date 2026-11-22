@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Admin\Accounts;
 use App\Admin\Audit;
+use App\Admin\ReturnPath;
 use Carbon\CarbonImmutable;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\Events\Logout;
@@ -34,7 +35,14 @@ class FortifyServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        Fortify::loginView(fn () => view('auth.login'));
+        Fortify::loginView(function (Request $request) {
+            // After "session ended" (hub.js), signing in returns to the page the user was on.
+            if (($path = ReturnPath::safe($request->query('return'))) !== null) {
+                $request->session()->put('url.intended', url($path));
+            }
+
+            return view('auth.login');
+        });
         Fortify::twoFactorChallengeView(fn () => view('auth.two-factor-challenge'));
         Fortify::authenticateUsing(fn (Request $request) => Accounts::authenticate($request));
         Fortify::authenticateThrough(fn () => [

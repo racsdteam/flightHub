@@ -7,7 +7,8 @@
  *    [data-dialog-cancel] (the dialog's own Cancel button).
  *  - A Livewire request answered 419 (the session ended: deactivated, idle timeout, signed out
  *    elsewhere) goes to the sign-in page named by this script tag's data-session-ended, which
- *    says "Your session has ended", instead of Livewire's "This page has expired" dialog.
+ *    says "Your session has ended", instead of Livewire's "This page has expired" dialog. The
+ *    page's own path goes with it (?return=), so signing in returns there.
  */
 (function () {
     var sessionEnded = document.currentScript ? document.currentScript.getAttribute('data-session-ended') : null;
@@ -20,7 +21,9 @@
             hooks.onError(function (error) {
                 if (error.response && error.response.status === 419) {
                     error.preventDefault();
-                    window.location.assign(sessionEnded);
+                    var target = new URL(sessionEnded, window.location.href);
+                    target.searchParams.set('return', window.location.pathname + window.location.search);
+                    window.location.assign(target.toString());
                 }
             });
         });

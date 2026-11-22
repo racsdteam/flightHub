@@ -143,6 +143,21 @@ class ScreensTest extends PollTestCase
         $this->assertSame($steward->email, DB::table('admin_audit')->where('action', 'reference.reactivated')->value('actor'));
     }
 
+    /**
+     * A4: the pending banner shows the time today, the date and time when it dates from an
+     * earlier day (Kigali).
+     */
+    public function test_the_pending_banner_shows_since_when(): void
+    {
+        Livewire::actingAs($this->user());
+        ReapplyPending::mark();     // 2026-10-29 07:42:30Z = 09:42 Kigali
+
+        Livewire::test(Stands::class)->assertSee('Re-apply pending since')->assertSeeHtml('>09:42</time>');
+        $this->travel(1)->days();
+        Livewire::test(Stands::class)->assertSeeHtml('>2026-10-29 09:42</time>');
+        ReapplyPending::clear();
+    }
+
     public function test_a_key_is_shown_once_and_stored_only_as_its_hash(): void
     {
         $this->consumer();

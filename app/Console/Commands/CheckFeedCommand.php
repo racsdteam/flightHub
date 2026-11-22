@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Str;
 
 /**
  * Stale-feed alert (D-041, D-055): one email to every active admin and to every address in
@@ -61,7 +62,8 @@ class CheckFeedCommand extends Command
             'last_outcome' => $last?->outcome,
         ], actor: 'hub');
 
-        $this->line("hub:check-feed: {$previous} → {$feed['feed']}; ".count($admins)." admins and {$extraMailed} extra recipients emailed.");
+        $this->line("hub:check-feed: {$previous} → {$feed['feed']}; ".count($admins).' '.Str::plural('admin', count($admins))
+            ." and {$extraMailed} extra ".Str::plural('recipient', $extraMailed).' emailed.');
 
         return self::SUCCESS;
     }

@@ -24,7 +24,7 @@ use Throwable;
  * last_seen_at only. Changed content is written in ONE transaction holding
  * GET_LOCK('flighthub_change_events'), so change_events ids commit in order.
  * After an ok poll (changed or not) the quality rules run in their own
- * transaction.
+ * transaction, under GET_LOCK('flighthub_quality').
  */
 final class Poller
 {
@@ -106,9 +106,13 @@ final class Poller
             throw $e;
         }
 
-        // Some rules depend on the clock: evaluate after every ok poll, changed or not.
+        // Some rules depend on the clock: evaluate after every ok poll, changed or not. Under the
+        // quality lock: while a re-apply runs the rules, this poll skips them (the next poll runs them).
         if ($result['outcome'] === AodbResponse::OK) {
-            $result['quality'] = $this->quality->evaluate($this->window, CarbonImmutable::now('UTC'));
+            $result['quality'] = $this->quality->evaluateLocked($this->window, CarbonImmutable::now('UTC'));
+            if ($result['quality'] === null) {
+                $result['quality_skipped'] = 'the quality lock is busy (a re-apply is running the rules); the next poll runs them';
+            }
         }
 
         return $result;

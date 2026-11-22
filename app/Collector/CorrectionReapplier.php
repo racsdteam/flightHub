@@ -16,12 +16,14 @@ use RuntimeException;
  * A changed served value → new version (cause correction) + correction events,
  * under GET_LOCK('flighthub_change_events'). Idempotent.
  *
- * Then the quality rules run as after an ok poll (same rules, same set: the
- * in-feed flights of the poll window), in their own transaction, so flags
- * follow corrected values and changed stands without waiting for a poll.
- * Only while the feed is ok: a poll evaluates only after an ok poll, and the
- * clock rules would flag times the hub has not received yet (no actual after
- * schedule…) on stale data; the next ok poll evaluates instead.
+ * Then, with the change events lock released, the quality rules run as after
+ * an ok poll (same rules, same set: the in-feed flights of the poll window),
+ * under GET_LOCK('flighthub_quality'), so flags follow corrected values and
+ * changed stands without waiting for a poll. Only while the feed is ok: a poll
+ * evaluates only after an ok poll, and the clock rules would flag times the
+ * hub has not received yet (no actual after schedule…) on stale data; the next
+ * ok poll evaluates instead. A busy quality lock (a poll is running the rules)
+ * skips them and asks for a retry: the command leaves the re-apply pending.
  */
 final class CorrectionReapplier
 {
@@ -31,10 +33,11 @@ final class CorrectionReapplier
     ) {}
 
     /**
-     * quality is null, with the reason in quality_skipped, when the feed is stale or
-     * AODB_WINDOW_DAYS_* give an invalid window (no poll evaluates then either).
+     * quality is null, with the reason in quality_skipped, when the feed is stale,
+     * AODB_WINDOW_DAYS_* give an invalid window (no poll evaluates then either) or the
+     * quality lock stayed busy (retry true: the re-apply stays pending).
      *
-     * @return array{flights: int, events: int, quality: array{evaluated: int, detected: int, cleared: int, reopened: int}|null, quality_skipped: string|null}
+     * @return array{flights: int, events: int, quality: array{evaluated: int, detected: int, cleared: int, reopened: int}|null, quality_skipped: string|null, retry: bool}
      */
     public function run(): array
     {
@@ -46,20 +49,25 @@ final class CorrectionReapplier
         try {
             $now = CarbonImmutable::now('UTC');
             $result = DB::transaction(fn () => $this->apply(FlightNormaliser::fromDatabase(), $now));
-
-            if (ApiResponses::feed()['feed'] !== 'ok') {
-                return $result + ['quality' => null, 'quality_skipped' => 'the feed is stale; the next ok poll runs them'];
-            }
-            try {
-                $window = Poller::window($now);
-            } catch (InvalidArgumentException) {
-                return $result + ['quality' => null, 'quality_skipped' => 'AODB_WINDOW_DAYS_* give an invalid window'];
-            }
-
-            return $result + ['quality' => $this->quality->evaluate($window, $now), 'quality_skipped' => null];
         } finally {
             DB::selectOne('SELECT RELEASE_LOCK(?) AS l', [Poller::LOCK]);
         }
+
+        if (ApiResponses::feed()['feed'] !== 'ok') {
+            return $result + ['quality' => null, 'quality_skipped' => 'the feed is stale; the next ok poll runs them', 'retry' => false];
+        }
+        try {
+            $window = Poller::window($now);
+        } catch (InvalidArgumentException) {
+            return $result + ['quality' => null, 'quality_skipped' => 'AODB_WINDOW_DAYS_* give an invalid window', 'retry' => false];
+        }
+
+        $quality = $this->quality->evaluateLocked($window, $now);
+        if ($quality === null) {
+            return $result + ['quality' => null, 'quality_skipped' => 'the quality lock is busy (a poll is running the rules); the re-apply stays pending', 'retry' => true];
+        }
+
+        return $result + ['quality' => $quality, 'quality_skipped' => null, 'retry' => false];
     }
 
     private function apply(FlightNormaliser $normaliser, CarbonImmutable $now): array

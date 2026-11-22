@@ -121,6 +121,19 @@ class DashboardAndAlertTest extends PollTestCase
         $this->assertSame([4, 2], [$details['recipients'], $details['extra_recipients']]);
     }
 
+    public function test_the_alert_output_says_admin_and_recipient_in_the_singular_for_one(): void
+    {
+        Mail::fake();
+        $this->user('admin');
+        config(['mail.alert_extra_recipients' => 'it.mailbox@rac.test']);
+        $this->poll();
+        $this->travel(16)->minutes();
+
+        Artisan::call('hub:check-feed');
+
+        $this->assertStringContainsString('ok → stale; 1 admin and 1 extra recipient emailed.', Artisan::output());
+    }
+
     public function test_the_extra_recipients_key_is_in_env_example_and_config(): void
     {
         $this->assertStringContainsString("\nALERT_EXTRA_RECIPIENTS=\n", (string) file_get_contents(base_path('.env.example')));

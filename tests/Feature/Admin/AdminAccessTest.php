@@ -4,6 +4,7 @@ namespace Tests\Feature\Admin;
 
 use App\Admin\Abilities;
 use App\Admin\Accounts;
+use App\Admin\ReturnPath;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
@@ -197,9 +198,42 @@ class AdminAccessTest extends TestCase
         $this->assertStringContainsString('error.response.status === 419', $script);
         $this->assertStringContainsString('error.preventDefault();', $script);
 
+        $this->assertStringContainsString("target.searchParams.set('return', window.location.pathname + window.location.search);", $script);
+
         auth()->logout();
         $this->get('/login?session=ended')->assertOk()->assertSee('Your session has ended. Please sign in again.');
         $this->get('/login')->assertOk()->assertDontSee('Your session has ended');
         $this->get('/login?session=other')->assertOk()->assertDontSee('Your session has ended');
+    }
+
+    /**
+     * A3: after "session ended", signing in (password, then TOTP) returns to the page the user
+     * was on.
+     */
+    public function test_signing_in_after_session_ended_returns_to_the_page(): void
+    {
+        $user = $this->user();
+        $this->get('/login?session=ended&return='.rawurlencode('/flights?flow=ARR&day=2026-10-29'))->assertOk();
+
+        $this->signIn($user)->assertRedirect(url('/flights?flow=ARR&day=2026-10-29'));
+    }
+
+    /**
+     * A3: only a same-origin path is accepted; anything else signs in to the dashboard.
+     */
+    public function test_the_return_path_accepts_same_origin_paths_only(): void
+    {
+        foreach (['https://evil.example/x', '//evil.example/x', '/\\evil.example', '\\evil.example', 'javascript:alert(1)', 'flights',
+            "/flights\nX", '/login', '/logout', '/two-factor-challenge', '/livewire-abc/update', '/LOGIN', str_repeat('/a', 1001)] as $return) {
+            $this->flushSession();
+            auth()->logout();
+            $this->get('/login?session=ended&return='.rawurlencode($return))->assertOk();
+            $this->assertNull(session('url.intended'), $return);
+        }
+        $this->assertSame('/quality?rule=type_missing', ReturnPath::safe('/quality?rule=type_missing'));
+
+        $this->flushSession();
+        $this->get('/login?session=ended&return='.rawurlencode('https://evil.example/x'))->assertOk();
+        $this->signIn($this->user())->assertRedirect(url('/'));
     }
 }

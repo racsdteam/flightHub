@@ -2,8 +2,10 @@
 
 namespace Tests\Feature\Reference;
 
+use App\Admin\ReapplyPending;
 use App\Collector\CorrectionReapplier;
 use App\Collector\Poller;
+use App\Quality\QualityEvaluator;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -132,6 +134,66 @@ class StandsAndReapplyTest extends ReferenceDataTestCase
         $this->assertSame(11, $open());
         $this->poll();
         $this->assertSame(3, $open());
+    }
+
+    /**
+     * A1: the quality lock held (as by a re-apply running the rules) when a poll ends: the poll
+     * skips its quality step, the next poll runs it.
+     */
+    public function test_a_poll_skips_its_quality_step_while_the_quality_lock_is_held(): void
+    {
+        config(['quality.lock_timeout_seconds' => 0]);
+        $this->poll();
+        $seen = DB::table('quality_flags')->max('last_detected_at');
+        $other = DB::connection('mariadb_ddl');
+        $other->selectOne('SELECT GET_LOCK(?, 0) AS l', [QualityEvaluator::LOCK]);
+
+        try {
+            $this->travel(5)->minutes();
+            $this->artisan('hub:poll')
+                ->expectsOutputToContain('hub:poll: quality rules not run (the quality lock is busy (a re-apply is running the rules); the next poll runs them)')
+                ->assertExitCode(0);
+            $this->assertSame($seen, DB::table('quality_flags')->max('last_detected_at'));
+        } finally {
+            $other->selectOne('SELECT RELEASE_LOCK(?) AS l', [QualityEvaluator::LOCK]);
+        }
+
+        $this->travel(5)->minutes();
+        $this->artisan('hub:poll')->expectsOutputToContain('hub:poll: quality: ')->assertExitCode(0);
+        $this->assertNotSame($seen, DB::table('quality_flags')->max('last_detected_at'));
+    }
+
+    /**
+     * A1: the quality lock held (as by a poll running the rules) when a re-apply corrects: the
+     * corrections are written, the rules are skipped and the re-apply stays pending; the next
+     * scheduled run evaluates.
+     */
+    public function test_a_reapply_stays_pending_while_the_quality_lock_is_held(): void
+    {
+        config(['quality.lock_timeout_seconds' => 0]);
+        $this->poll();
+        $open = fn () => DB::table('quality_flags')->where(['rule' => 'type_missing', 'state' => 'open'])->count();
+        $this->aircraftType('WB', 'DH8', 'DH8D', 'Dash 8-400 (TEST)', 'M');
+        ReapplyPending::mark();
+        $other = DB::connection('mariadb_ddl');
+        $other->selectOne('SELECT GET_LOCK(?, 0) AS l', [QualityEvaluator::LOCK]);
+
+        try {
+            $this->artisan('hub:reapply-corrections', ['--if-pending' => true])
+                ->expectsOutputToContain('8 flights corrected, 24 correction events; quality rules not run (the quality lock is busy (a poll is running the rules); the re-apply stays pending).')
+                ->assertExitCode(0);
+            $this->assertSame(11, $open());
+            $this->assertTrue(ReapplyPending::isPending());
+        } finally {
+            $other->selectOne('SELECT RELEASE_LOCK(?) AS l', [QualityEvaluator::LOCK]);
+        }
+
+        $this->artisan('hub:reapply-corrections', ['--if-pending' => true])
+            ->expectsOutputToContain('0 flights corrected, 0 correction events; quality: ')
+            ->assertExitCode(0);
+        $this->assertSame(3, $open());
+        $this->assertFalse(ReapplyPending::isPending());
+        ReapplyPending::clear();
     }
 
     public function test_a_deactivated_correction_returns_the_aodb_value(): void

@@ -23,4 +23,8 @@ return [
     // Suspected duplicate: same full flight number and flow, reference times within this many hours.
     'duplicate_window_hours' => (int) (env('QUALITY_DUPLICATE_WINDOW_HOURS') ?: 6),
 
+    // Seconds a poll or a re-apply waits for GET_LOCK('flighthub_quality') before it skips its
+    // quality step (a poll leaves it to the next poll; a re-apply stays pending).
+    'lock_timeout_seconds' => 10,
+
 ];
