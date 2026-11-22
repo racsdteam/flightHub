@@ -48,6 +48,23 @@
             <div class="input-icon"><x-icon name="search" /><input id="flight" type="search" wire:model.live.debounce.400ms="flight" placeholder="Flight number or AODB id"></div></div>
     </div>
 
+    @if ($canAct && $rule !== '' && $bulkCount > 0)
+        {{-- Bulk resolution (D-057): every unresolved flag matching the filters, all pages. --}}
+        <div class="card bulk-bar" role="group" aria-label="Resolve every flag shown">
+            @if ($bulkCount > $bulkLimit)
+                <p><x-icon name="info" size="18" /> <strong>Resolve all {{ $bulkCount }} shown:</strong> more than {{ $bulkLimit }}. Narrow the filters (a day, a state or a flight) to resolve at most {{ $bulkLimit }} at a time.</p>
+            @else
+                <p><strong>Resolve all {{ $bulkCount }} shown</strong> <span class="muted">{{ $rule }}, every page, no resolution yet</span></p>
+                <div class="actions">
+                    <button type="button" class="button button-xs button-secondary" wire:click="askBulk('fixed')"><x-icon name="check" size="14" /> Fixed</button>
+                    <button type="button" class="button button-xs button-secondary" wire:click="askBulk('ignored')"><x-icon name="minus" size="14" /> Ignored</button>
+                    <button type="button" class="button button-xs button-secondary" wire:click="askBulk('reported')"><x-icon name="arrow-up" size="14" /> Reported</button>
+                </div>
+            @endif
+            @error('bulk') <p class="field-error" role="alert">{{ $message }}</p> @enderror
+        </div>
+    @endif
+
     <div class="card table-card">
         @if ($flags->isEmpty())
             <x-empty icon="check-circle" title="No flags for these filters" hint="Try another state, rule or day." />
@@ -102,5 +119,9 @@
 
     @if ($canAct && $dialog)
         @include('livewire.quality.same-as-dialog', $dialog)
+    @endif
+
+    @if ($canAct && $bulkResolution)
+        @include('livewire.quality.bulk-dialog')
     @endif
 </div>

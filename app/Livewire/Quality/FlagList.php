@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Quality;
 
+use App\Admin\Audit;
 use App\Admin\FlagCounts;
 use App\Flights\Window;
 use App\Livewire\AdminPage;
@@ -11,8 +12,10 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Str;
 use Illuminate\View\View;
 use InvalidArgumentException;
+use Livewire\Attributes\Locked;
 use Livewire\Attributes\Title;
 use Livewire\Attributes\Url;
 use Livewire\WithPagination;
@@ -21,6 +24,12 @@ use Livewire\WithPagination;
  * Quality flags: filters (state, resolution, rule, Kigali day, flight) and counts per rule;
  * each row can be resolved here as on the flag page (ResolvesFlags: manage-quality, a note
  * for ignored and reported, "same as" after the same confirmation dialog).
+ *
+ * Bulk resolution (D-057): with a rule selected, every unresolved flag matching the filters
+ * (all pages, at most 500) gets one resolution (fixed, ignored or reported; never same_as) and
+ * one note, after a confirmation. Each flag goes through FlagResolver, so each keeps its own
+ * event and audit line; one more audit line records the bulk action. Flags resolved by someone
+ * else meanwhile are skipped and counted.
  */
 #[Title('Data quality')]
 class FlagList extends AdminPage
@@ -35,6 +44,20 @@ class FlagList extends AdminPage
 
     /** The flag whose "same as" confirmation is open. */
     public ?int $sameAsFor = null;
+
+    public const BULK_LIMIT = 500;
+
+    private const BULK_RESOLUTIONS = ['fixed', 'ignored', 'reported'];
+
+    /** The open bulk confirmation: its resolution and the flags it covers, fixed when asked. */
+    #[Locked]
+    public ?string $bulkResolution = null;
+
+    /** @var list<int> */
+    #[Locked]
+    public array $bulkIds = [];
+
+    public string $bulkNote = '';
 
     #[Url]
     public string $state = 'open';
@@ -60,6 +83,7 @@ class FlagList extends AdminPage
     {
         if (in_array($property, ['state', 'resolution', 'rule', 'day', 'flight'], true)) {
             $this->resetPage();
+            [$this->bulkResolution, $this->bulkIds, $this->bulkNote] = [null, [], ''];
         }
     }
 
@@ -113,6 +137,97 @@ class FlagList extends AdminPage
         }
     }
 
+    /**
+     * Bulk: every unresolved flag matching the filters, a rule selected (all pages).
+     */
+    private function bulkQuery(): Builder
+    {
+        return $this->filtered(true)->whereNull('q.resolution');
+    }
+
+    public function askBulk(string $resolution): void
+    {
+        Gate::authorize('manage-quality');
+        abort_unless(in_array($resolution, self::BULK_RESOLUTIONS, true) && $this->rule !== '', 422);
+        $this->resetErrorBag();
+        [$this->noteFor, $this->noteResolution, $this->sameAsFor] = [null, null, null];
+
+        $ids = $this->bulkQuery()->orderBy('q.id')->limit(self::BULK_LIMIT + 1)->pluck('q.id')->map(fn ($id) => (int) $id)->all();
+        if (count($ids) > self::BULK_LIMIT) {
+            $this->addError('bulk', 'More than '.self::BULK_LIMIT.' flags: narrow the filters (a day, a state or a flight) to resolve at most '.self::BULK_LIMIT.' at a time.');
+
+            return;
+        }
+        if ($ids === []) {
+            $this->addError('bulk', 'No unresolved flag matches these filters.');
+
+            return;
+        }
+        [$this->bulkResolution, $this->bulkIds, $this->bulkNote] = [$resolution, $ids, ''];
+    }
+
+    public function cancelBulk(): void
+    {
+        [$this->bulkResolution, $this->bulkIds, $this->bulkNote] = [null, [], ''];
+        $this->resetErrorBag();
+    }
+
+    public function confirmBulk(): void
+    {
+        Gate::authorize('manage-quality');
+        $resolution = $this->bulkResolution;
+        abort_unless(in_array($resolution, self::BULK_RESOLUTIONS, true) && $this->rule !== ''
+            && $this->bulkIds !== [] && count($this->bulkIds) <= self::BULK_LIMIT, 422);
+        $note = trim($this->bulkNote);
+        if (in_array($resolution, ['ignored', 'reported'], true) && $note === '') {
+            $this->addError('bulkNote', 'A note is required for '.$resolution.'.');
+
+            return;
+        }
+        if (mb_strlen($note) > 500) {
+            $this->addError('bulkNote', 'Note is at most 500 characters.');
+
+            return;
+        }
+
+        $actor = (string) auth()->user()->email;
+        $resolver = new FlagResolver;
+        $resolved = 0;
+        $skipped = 0;
+        foreach ($this->bulkIds as $id) {
+            $done = DB::transaction(function () use ($id, $resolution, $actor, $note, $resolver) {
+                // Locked, then checked: a flag resolved by someone else meanwhile (or no longer
+                // of this rule) is skipped, never overwritten.
+                $flag = DB::table('quality_flags')->where('id', $id)->lockForUpdate()->first();
+                if ($flag === null || $flag->resolution !== null || $flag->rule !== $this->rule) {
+                    return false;
+                }
+                $resolver->resolve($id, $resolution, $actor, $note === '' ? null : $note);
+
+                return true;
+            });
+            $done ? $resolved++ : $skipped++;
+        }
+
+        Audit::record('quality.bulk_resolved', [
+            'rule' => $this->rule,
+            'filters' => [
+                'state' => $this->state === '' ? 'all' : $this->state,
+                'resolution' => $this->resolution === '' ? 'all' : $this->resolution,
+                'day' => $this->day === '' ? null : $this->day,
+                'flight' => trim($this->flight) === '' ? null : trim($this->flight),
+            ],
+            'resolution' => $resolution,
+            'note' => $note === '' ? null : $note,
+            'count' => $resolved,
+            'skipped' => $skipped,
+        ], actor: $actor);
+
+        [$this->bulkResolution, $this->bulkIds, $this->bulkNote] = [null, [], ''];
+        session()->flash('status', "Resolved {$resolved} ".Str::plural('flag', $resolved)." as {$resolution}"
+            .($skipped > 0 ? "; {$skipped} skipped (resolved by someone else meanwhile)" : '').'.');
+    }
+
     private function filtered(bool $withRule): Builder
     {
         $query = DB::table('quality_flags as q')->join('flights as f', 'f.id', '=', 'q.flight_id');
@@ -159,9 +274,13 @@ class FlagList extends AdminPage
                 ->whereIn('flight_id', [$hide->id, $keep->id])->selectRaw('flight_id, COUNT(*) AS n')->groupBy('flight_id')->pluck('n', 'flight_id')->all()];
         }
 
+        $canAct = Gate::allows('manage-quality');
+
         return view('livewire.quality.flag-list', [
-            'canAct' => Gate::allows('manage-quality'),
+            'canAct' => $canAct,
             'dialog' => $dialog,
+            'bulkCount' => $canAct && $this->rule !== '' ? $this->bulkQuery()->count() : 0,
+            'bulkLimit' => self::BULK_LIMIT,
             // Display only: totals and 24-hour trends from first_detected_at / cleared_at.
             'openNow' => $openNow,
             'openTrend' => $openNow - FlagCounts::openAt($now->subDay()),

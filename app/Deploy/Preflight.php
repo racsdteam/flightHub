@@ -2,6 +2,7 @@
 
 namespace App\Deploy;
 
+use App\Admin\BackupStatus;
 use App\Api\ApiResponses;
 use App\Models\User;
 use Carbon\CarbonImmutable;
@@ -203,6 +204,12 @@ final class Preflight
             return is_string($beat) && CarbonImmutable::parse($beat)->gte(CarbonImmutable::now('UTC')->subMinutes(self::HEARTBEAT_WARN_MINUTES));
         }, self::WARN);
         $this->check('feed is OK (not stale)', fn () => ApiResponses::feed()['feed'] === 'ok', self::WARN);
+        $this->check('FLIGHTHUB_BACKUP_DIR is set', fn () => BackupStatus::enabled() || ! app()->environment('production'), self::WARN);
+        if (BackupStatus::enabled()) {
+            $this->check('newest backup within '.(int) config('backup.stale_after_hours', 26).' hours', fn () => BackupStatus::stale() === false, self::WARN);
+        } else {
+            $this->results[] = [self::SKIPPED, 'newest backup within '.(int) config('backup.stale_after_hours', 26).' hours (FLIGHTHUB_BACKUP_DIR is empty)'];
+        }
     }
 
     private function ddlChecks(): void

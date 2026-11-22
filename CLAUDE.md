@@ -42,7 +42,14 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   AlmaLinux / cPanel / CloudLinux, dedicated server at AOS.
 - No Node and no SSH on the server. Deploy: scripts/deploy.sh (see docs/DEPLOY.md), in cPanel
   Terminal as sysrac (D-045), with FLIGHTHUB_DEPLOY_AUTHORIZED = the token Dany commits in the
-  script for that deploy (D-049). First deploy only: create the first admin with php artisan
+  script for that deploy (D-049). Order (D-056): every check first (fetch; TARGET = the
+  upstream commit; HEAD is TARGET or its ancestor; the token read from TARGET:scripts/deploy.sh;
+  a changed deploy.sh re-run once from a copy, for the same TARGET; the DDL password asked once;
+  the DDL login) → maintenance on, before any file changes → wait (≤ 120 s) for a running
+  hub:poll / reapply / backfill → git merge --ff-only TARGET (never a pull) → composer install →
+  config:clear → migrations (DDL) → grants → re-apply → caches → serving check → preflight → up.
+  First install (no vendor/, nothing live): code and composer first, then the DDL login and
+  maintenance. First deploy only: create the first admin with php artisan
   hub:admin-create {email} {name} --role=admin (temporary password printed once).
 - The DDL password is typed at deploy.sh's prompt (read -s) or taken from the operator's
   environment (FLIGHTHUB_DB_DDL_PASSWORD): never stored, never in .env, never in a file, never
@@ -135,6 +142,15 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
 - Quality flags have a state (open / cleared, set by the hub) and a resolution (fixed,
   ignored, reported, same_as — set by a person). Flags are never deleted; their history is
   quality_flag_events (append-only).
+- Bulk resolution (D-057, Quality list, manage-quality): one rule selected; every unresolved
+  flag matching the filters, all pages, at most 500; fixed, ignored or reported (never
+  same_as); a note for ignored and reported. Each flag goes through FlagResolver (its own event
+  and audit line) plus one quality.bulk_resolved audit line; flags resolved meanwhile are
+  skipped and counted.
+- Alerts (hub:check-feed, D-041, D-055, D-058): the feed turning stale or recovering, and the
+  backup (newest manifest in FLIGHTHUB_BACKUP_DIR older than 26 hours, or none; off while
+  empty), each with its own state: one mail per address when it turns stale and one when it
+  recovers, to the active admins and ALERT_EXTRA_RECIPIENTS. Never a dump's contents.
 
 ## AODB API
 - Innov'ATM "Airport Keeper External API" v3.2.5; spec committed in
@@ -201,7 +217,8 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   deleted; deactivation ends their sessions.
 - Audited (admin_audit, append-only, kept forever): sign-in success / failure / lock, TOTP
   enrolled / failed / recovery code used, password changed, sign-out, user created / reset /
-  deactivated, stale and recovery alerts, quality resolutions.
+  deactivated, stale and recovery alerts (feed and backup), quality resolutions (one by one
+  and in bulk).
 - Never in the audit log or any log: passwords, TOTP secrets or codes, recovery codes, API
   keys, session ids.
 - CSP: default-src 'none'; scripts and styles only from the hub or with the per-request
@@ -214,7 +231,7 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   nosniff, X-Frame-Options DENY, Referrer-Policy same-origin, Permissions-Policy, HSTS in
   production; the CSP on HTML responses (the fallback 404 included). The prerendered
   maintenance page (artisan down --render) is served before the application boots, so it
-  carries only Retry-After.
+  carries only Retry-After (accepted, D-059).
 - Screen map (each route carries its ability; every Livewire screen re-checks it on every
   request, App\Livewire\AdminPage::boot):
   Feed health /, Flights /flights and /flights/{aodbId}, Quality /quality and

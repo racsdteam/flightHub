@@ -23,9 +23,15 @@ class PreflightTest extends PollTestCase
 
     private FakeProbe $probe;
 
+    private string $backups;
+
     protected function setUp(): void
     {
         parent::setUp();
+        // A backup an hour old (D-058).
+        $this->backups = sys_get_temp_dir().'/hub-preflight-backups-'.bin2hex(random_bytes(6));
+        mkdir($this->backups, 0700);
+        touch($this->backups.'/flighthub-'.CarbonImmutable::now('UTC')->subHour()->format('Ymd\THis\Z').'.manifest');
         $this->poll();                       // feed ok
         $this->user('admin');                // an active admin
         Cache::forever(Preflight::HEARTBEAT_KEY, CarbonImmutable::now('UTC')->format('Y-m-d\TH:i:s\Z'));
@@ -37,9 +43,17 @@ class PreflightTest extends PollTestCase
             'aodb.client' => 'http',
             'mail.default' => 'smtp',
             'mail.alert_extra_recipients' => 'it.mailbox@rac.test',
+            'backup.dir' => $this->backups,
         ]);
         $this->probe = new FakeProbe;
         $this->app->instance(Probe::class, $this->probe);
+    }
+
+    protected function tearDown(): void
+    {
+        array_map('unlink', glob($this->backups.'/*') ?: []);
+        @rmdir($this->backups);
+        parent::tearDown();
     }
 
     /**
@@ -153,6 +167,20 @@ class PreflightTest extends PollTestCase
         }
         config(['mail.alert_extra_recipients' => '']);
         $this->assertSame('warn', $this->preflight(0)['ALERT_EXTRA_RECIPIENTS is set and valid']);
+    }
+
+    public function test_backup_warnings(): void
+    {
+        $this->assertSame(['pass', 'pass'], [$this->preflight(0)['FLIGHTHUB_BACKUP_DIR is set'], $this->preflight(0)['newest backup within 26 hours']]);
+
+        array_map('unlink', glob($this->backups.'/*'));
+        touch($this->backups.'/flighthub-'.CarbonImmutable::now('UTC')->subHours(27)->format('Ymd\THis\Z').'.manifest');
+        $this->assertSame('warn', $this->preflight(0)['newest backup within 26 hours']);
+
+        config(['backup.dir' => '']);
+        $results = $this->preflight(0);
+        $this->assertSame('warn', $results['FLIGHTHUB_BACKUP_DIR is set']);
+        $this->assertSame('skipped', $results['newest backup within 26 hours (FLIGHTHUB_BACKUP_DIR is empty)']);
     }
 
     public function test_ddl_checks_are_skipped_without_the_ddl_password_in_this_runs_environment(): void

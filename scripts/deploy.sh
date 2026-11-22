@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# RAC Flight Data Hub — deploy to flightdata.rac.co.rw (D-049). Runbook: docs/DEPLOY.md.
+# RAC Flight Data Hub — deploy to flightdata.rac.co.rw (D-049, D-056). Runbook: docs/DEPLOY.md.
 #
 # Run ON the server, in cPanel Terminal, as the account user sysrac — never root:
 #
@@ -10,16 +10,21 @@
 #   FLIGHTHUB_DB_DDL_USER       required, from the operator's environment
 #   FLIGHTHUB_DB_DDL_PASSWORD   from the operator's environment, or typed at the prompt (not
 #                               echoed). Never stored, never written to a file, never cached,
-#                               never exported by this script.
+#                               never exported by this script. Asked once.
 #
 #     scripts/deploy.sh --dry-run    prints the steps and changes nothing
 #
-# Overrides for tests and unusual hosts: FLIGHTHUB_APP_DIR, FLIGHTHUB_DEPLOY_DIR, FLIGHTHUB_PHP,
-# FLIGHTHUB_COMPOSER (composer's PHP file, run with FLIGHTHUB_PHP).
+# The order (D-056): every check first; then maintenance goes on BEFORE any file changes; the
+# deployed commit is exactly the fetched commit whose token was checked (TARGET), reached with
+# `git merge --ff-only TARGET`, never a second pull; a changed deploy.sh is re-run once, before
+# maintenance. On the first install nothing is live: the code and vendor/ come first.
 #
-# Mirrors KIA PULSE's deploy.sh: the authorisation token, the preconditions before maintenance,
-# the trap armed after `artisan down` that leaves maintenance on, the serving check through the
-# public URL with a bypass cookie, preflight before `artisan up`.
+# Overrides for tests and unusual hosts: FLIGHTHUB_APP_DIR, FLIGHTHUB_DEPLOY_DIR, FLIGHTHUB_PHP,
+# FLIGHTHUB_COMPOSER (composer's PHP file, run with FLIGHTHUB_PHP), FLIGHTHUB_JOB_WAIT_SECONDS.
+# Set by this script for its own re-run only: FLIGHTHUB_DEPLOY_REEXEC, FLIGHTHUB_DEPLOY_TARGET.
+#
+# Nothing here depends on the script's own path: the re-run is a copy in the deploy folder,
+# and every path comes from APP_DIR.
 
 set -euo pipefail
 
@@ -31,10 +36,9 @@ set -euo pipefail
 #  token here in the commit that prepares a deploy, so the history records WHO authorised WHICH
 #  deploy; the next deploy needs a new token in a new commit. Never an argument.
 #
-#  The value checked is the one in THIS FILE AS IT IS IN THE COMMIT BEING DEPLOYED (origin's
-#  branch, fetched first; the fetch leaves the working tree alone). Checked against the copy on
-#  disk, the commit carrying the token could only deploy after a manual pull, and a changed
-#  deploy.sh could never be re-run by the pull below.
+#  The value checked is the one in THIS FILE AS IT IS IN THE COMMIT BEING DEPLOYED (TARGET: the
+#  upstream commit, fetched first; the fetch leaves the working tree alone), and TARGET is what
+#  gets deployed — a push after the fetch changes nothing.
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 DEPLOY_AUTHORISATION="not-yet-authorised"
 
@@ -42,14 +46,18 @@ APP_DIR="${FLIGHTHUB_APP_DIR:-/home/sysrac/flight-hub}"
 DEPLOY_DIR="${FLIGHTHUB_DEPLOY_DIR:-/home/sysrac/flight-hub-deploy}"
 PHP="${FLIGHTHUB_PHP:-/usr/local/bin/ea-php83}"
 COMPOSER_BIN="${FLIGHTHUB_COMPOSER:-}"
+JOB_WAIT_SECONDS="${FLIGHTHUB_JOB_WAIT_SECONDS:-120}"
 CURRENT_STEP="startup"
 DDL_USER=""
 DDL_PASS=""
-DDL_VERIFIED="no"
-PULLED="no"
+TARGET=""
+PREVIOUS=""
+BYPASS_VALUE=""
+FIRST_INSTALL="no"
+FILES_CHANGED="no"
 
 # Nothing from the operator's shell may reach the config cache or replace the .env: the DDL
-# credentials travel only as an assignment prefix on the three commands that need them.
+# credentials travel only as an assignment prefix on the commands that need them.
 unset DB_DDL_USERNAME DB_DDL_PASSWORD DB_USERNAME DB_PASSWORD
 
 step() {
@@ -57,13 +65,17 @@ step() {
     echo "==> $1"
 }
 
+short() {
+    printf '%s' "${1:0:12}"
+}
+
 refuse() {
     trap - EXIT
     echo "" >&2
     echo "✗ $1" >&2
-    if [ "$PULLED" = "yes" ]; then
-        echo "  The site was NOT put in maintenance and the database was not touched, but git pull and" >&2
-        echo "  composer already ran: the live site now runs the pulled code. Fix the cause and re-run." >&2
+    if [ "$FILES_CHANGED" = "yes" ]; then
+        echo "  First install: the code and vendor/ were put in place, but nothing is live (no maintenance was" >&2
+        echo "  needed) and the database has not been touched. Fix the cause and re-run." >&2
     else
         echo "  Nothing has been changed: the site is still live and the database has not been touched." >&2
     fi
@@ -76,9 +88,8 @@ before_maintenance_failure() {
     [ "$code" -eq 0 ] && return 0
     echo "" >&2
     echo "✗ DEPLOY STOPPED during: ${CURRENT_STEP} (before maintenance)." >&2
-    if [ "$PULLED" = "yes" ]; then
-        echo "  The site is live and the database was not touched, but the code was already pulled: the live" >&2
-        echo "  site runs it now. Fix the cause and re-run scripts/deploy.sh." >&2
+    if [ "$FILES_CHANGED" = "yes" ]; then
+        echo "  First install: nothing is live yet and the database was not touched. Fix the cause and re-run." >&2
     else
         echo "  Nothing has been changed: the site is still live and the database has not been touched." >&2
     fi
@@ -91,8 +102,7 @@ before_maintenance_failure() {
 #  DOWN is visible at once and one `artisan up` reverses it. UP with a half-applied migration is
 #  invisible and, for the append-only tables, permanent: their triggers are created by
 #  migrations, and rows written while a trigger is missing cannot be removed afterwards. So
-#  nothing lifts maintenance automatically; the handler names the step, because whether the
-#  database was touched depends on it.
+#  nothing lifts maintenance automatically; the handler names the step and says what changed.
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 on_failure() {
     local code=$?
@@ -104,29 +114,48 @@ on_failure() {
     echo "  THE SITE IS STILL IN MAINTENANCE MODE, serving the 503 page. Nothing has been lifted"
     echo "  automatically, and nothing unverified is reachable."
     echo ""
+    echo "  Previous commit: $PREVIOUS"
+    echo "  Target commit:   $TARGET"
+    echo ""
+    if [ "$FILES_CHANGED" = "no" ]; then
+        echo "  NOTHING CHANGED: the code is still the previous commit and the database was not touched."
+        echo "  It is safe to serve again:"
+        echo ""
+        echo "      $PHP artisan up"
+        echo ""
+        exit "$code"
+    fi
+
     case "$CURRENT_STEP" in
         "Migrations (as the DDL user)")
-            echo "  THE DATABASE WAS BEING WRITTEN WHEN THIS FAILED. Some migrations may have applied and others"
-            echo "  not. The append-only triggers are created by migrations, so a partial run can leave a history"
-            echo "  table that accepts writes it should refuse. Check the state BEFORE deciding anything:"
+            echo "  FILES CHANGED (the code is the target commit) AND THE DATABASE WAS BEING WRITTEN WHEN THIS FAILED."
+            echo "  Some migrations may have applied and others not. The append-only triggers are created by"
+            echo "  migrations, so a partial run can leave a history table that accepts writes it should refuse."
+            echo "  Check the state BEFORE deciding anything, and do NOT return the code to the previous commit:"
             echo "      read -rs P; DB_DDL_USERNAME=<DDL user> DB_DDL_PASSWORD=\"\$P\" $PHP artisan migrate:status --database=mariadb_ddl; unset P"
             ;;
-        "Grants")
-            echo "  Migrations had completed, so the schema is whole. The runtime user's grants do not match"
-            echo "  config/grants.php yet: run the grants file as root (phpMyAdmin), then $PHP artisan hub:check-grants."
-            ;;
-        "Re-apply corrections"|"Caches"|"Serving check"|"Preflight"|"Up")
-            echo "  Migrations had completed, so the schema is whole. The failure is after the database was written."
+        "Grants"|"Re-apply corrections"|"Caches"|"Serving check"|"Preflight"|"Up")
+            echo "  FILES CHANGED (the code is the target commit). Migrations had completed, so the schema is"
+            echo "  whole and matches the target commit: fix forward and re-run, do not return to the previous commit."
+            if [ "$CURRENT_STEP" = "Grants" ]; then
+                echo "  The runtime user's grants do not match config/grants.php yet: run the grants file as root"
+                echo "  (phpMyAdmin), then $PHP artisan hub:check-grants."
+            fi
             if [ "$CURRENT_STEP" = "Caches" ]; then
                 echo ""
                 echo "  IF EVERY ARTISAN COMMAND NOW FAILS AT BOOT, a frozen config cache is the cause and"
                 echo "  config:clear cannot remove it (it boots the framework first). Delete it by hand:"
                 echo "      rm $APP_DIR/bootstrap/cache/config.php"
-                echo "  then $PHP artisan --version answers again. Fix the .env and re-run this script."
+                echo "  then $PHP artisan --version answers again."
             fi
             ;;
         *)
-            echo "  This step runs BEFORE any migration, so the database was not touched."
+            echo "  FILES CHANGED (the code was being updated to the target commit), but this step runs BEFORE the"
+            echo "  migrations: the database was NOT touched. To return to the previous commit:"
+            echo ""
+            echo "      cd $APP_DIR && git reset --hard $PREVIOUS"
+            echo "      $PHP $COMPOSER_BIN install --no-dev --optimize-autoloader --no-interaction"
+            echo "      $PHP artisan config:clear"
             ;;
     esac
     echo ""
@@ -144,33 +173,48 @@ scripts/deploy.sh --dry-run: the steps of a deploy (nothing is run).
   Preconditions (all before maintenance; any refusal changes nothing):
     · not root; PHP 8.3.x at $PHP; curl; composer (FLIGHTHUB_COMPOSER) runs with that PHP
     · origin is github-flighthub:… (the deploy key); the git working tree is clean
-    · git fetch; FLIGHTHUB_DEPLOY_AUTHORIZED equals DEPLOY_AUTHORISATION in scripts/deploy.sh of the commit
-      being deployed (yes-<YYYY-MM-DD>-<initials>)
-    · FLIGHTHUB_DB_DDL_USER set; FLIGHTHUB_DB_DDL_PASSWORD from the environment or typed (not echoed)
-    · the DDL login works (hub:preflight --ddl-login; on the first install after composer)
-  1. Pull            git pull --ff-only; if scripts/deploy.sh changed, re-run the new one once
-  2. Dependencies    composer install --no-dev --optimize-autoloader --no-interaction
-  3. Maintenance     artisan down --render="errors::503" --retry=15 --secret=<random, this deploy only>
-                     (from here any failure leaves maintenance on and names the step)
-  4. Config cache    artisan config:clear (so the DDL prefix below reaches the config)
-  5. Migrations      DB_DDL_USERNAME=… DB_DDL_PASSWORD=… artisan migrate --database=mariadb_ddl --force
-  6. Grants          hub:check-grants; when they differ: hub:grants-sql (DDL prefix) to
-                     $DEPLOY_DIR/grants-<time>.sql (mode 600), pause until run as root, check again
-  7. Re-apply        artisan hub:reapply-corrections
-  8. Caches          config/route/view/event:clear, clear-compiled; config/route/view/event:cache
-                     (never optimize:clear or cache:clear)
-  9. Serving check   through APP_URL with the bypass cookie: GET / → 200|302, GET /api/v1/health → 401
- 10. Preflight       DB_DDL_USERNAME=… DB_DDL_PASSWORD=… artisan hub:preflight (with the DDL checks)
- 11. Up              artisan up
-STEPS
-}
+    · git fetch; TARGET = the upstream commit; HEAD is TARGET or its ancestor
+    · FLIGHTHUB_DEPLOY_AUTHORIZED equals DEPLOY_AUTHORISATION in TARGET:scripts/deploy.sh
+      (yes-<YYYY-MM-DD>-<initials>)
+    · if TARGET's scripts/deploy.sh differs from HEAD's: run that version once, from a copy in
+      $DEPLOY_DIR, for the same TARGET (before maintenance and before the DDL prompt)
+    · FLIGHTHUB_DB_DDL_USER set; FLIGHTHUB_DB_DDL_PASSWORD from the environment or typed once (not echoed)
+    · the DDL login works with the code on disk (hub:preflight --ddl-login)
 
-script_sum() {
-    cksum < "$APP_DIR/scripts/deploy.sh"
+  Every deploy after the first (vendor/ exists):
+  1. Maintenance     artisan down --render="errors::503" --retry=15 --secret=<random, this deploy only>
+                     (from here any failure leaves maintenance on and says what changed)
+  2. Running jobs    wait up to ${JOB_WAIT_SECONDS} s for hub:poll / hub:reapply-corrections / hub:backfill;
+                     still running: artisan up, nothing changed, stop
+  3. Update code     git merge --ff-only TARGET (the commit whose token was checked; never a pull)
+  4. Dependencies    composer install --no-dev --optimize-autoloader --no-interaction
+  5. Config cache    artisan config:clear (so the DDL prefix below reaches the config)
+  6. Migrations      DB_DDL_USERNAME=… DB_DDL_PASSWORD=… artisan migrate --database=mariadb_ddl --force
+  7. Grants          hub:check-grants; when they differ: hub:grants-sql (DDL prefix) to
+                     $DEPLOY_DIR/grants-<time>.sql (mode 600), pause until run as root, check again
+  8. Re-apply        artisan hub:reapply-corrections
+  9. Caches          config/route/view/event:clear, clear-compiled; config/route/view/event:cache
+                     (never optimize:clear or cache:clear)
+ 10. Serving check   through APP_URL with the bypass cookie: GET / → 200|302, GET /api/v1/health → 401
+ 11. Preflight       DB_DDL_USERNAME=… DB_DDL_PASSWORD=… artisan hub:preflight (with the DDL checks)
+ 12. Up              artisan up
+
+  First install (no vendor/, nothing live): update code (git merge --ff-only TARGET) →
+  composer install → DDL login → maintenance → running jobs → 5 to 12 above.
+STEPS
 }
 
 ddl_login() {
     DB_DDL_USERNAME="$DDL_USER" DB_DDL_PASSWORD="$DDL_PASS" "$PHP" artisan hub:preflight --ddl-login
+}
+
+update_code() {
+    FILES_CHANGED="yes"
+    git merge --ff-only --quiet "$TARGET"
+}
+
+composer_install() {
+    "$PHP" "$COMPOSER_BIN" install --no-dev --optimize-autoloader --no-interaction
 }
 
 preconditions() {
@@ -190,6 +234,7 @@ preconditions() {
     fi
     [ -n "$COMPOSER_BIN" ] && "$PHP" "$COMPOSER_BIN" --version >/dev/null 2>&1 \
         || refuse "composer does not run with $PHP; set FLIGHTHUB_COMPOSER to composer's PHP file (e.g. /opt/cpanel/composer/bin/composer)."
+    [[ "$JOB_WAIT_SECONDS" =~ ^[0-9]{1,4}$ ]] || refuse "FLIGHTHUB_JOB_WAIT_SECONDS must be a number of seconds."
 
     case "$(git remote get-url origin 2>/dev/null || true)" in
         github-flighthub:*) ;;
@@ -197,16 +242,33 @@ preconditions() {
     esac
     [ -z "$(git status --porcelain)" ] || refuse "The git working tree is not clean (git status): commit nothing on the server; restore the files."
 
-    git fetch --quiet origin || refuse "git fetch from origin failed (deploy key, network)."
+    # TARGET: the commit to deploy, fixed once. A re-run gets it from the first run and never
+    # resolves the upstream again, so both deploy the same commit.
+    if [ "${FLIGHTHUB_DEPLOY_REEXEC:-}" = "1" ]; then
+        TARGET="${FLIGHTHUB_DEPLOY_TARGET:-}"
+        [[ "$TARGET" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "${TARGET}^{commit}" 2>/dev/null \
+            || refuse "The re-run has no valid FLIGHTHUB_DEPLOY_TARGET."
+    else
+        [ -z "${FLIGHTHUB_DEPLOY_TARGET:-}" ] || refuse "FLIGHTHUB_DEPLOY_TARGET is set by this script for its own re-run only; unset it."
+        git fetch --quiet origin || refuse "git fetch from origin failed (deploy key, network)."
+        TARGET="$(git rev-parse --verify --quiet '@{u}^{commit}' || true)"
+        [[ "$TARGET" =~ ^[0-9a-f]{40}$ ]] || refuse "The branch has no upstream commit to deploy (git branch -u origin/main)."
+    fi
+    PREVIOUS="$(git rev-parse HEAD)"
+    git merge-base --is-ancestor "$PREVIOUS" "$TARGET" \
+        || refuse "HEAD ($(short "$PREVIOUS")) is not the fetched commit ($(short "$TARGET")) or its ancestor: the server has a commit of its own, or the branch was rewritten. Nothing is deployed."
+    echo "  Deploying $(short "$TARGET") (now $(short "$PREVIOUS"))."
+
     local authorised
-    authorised="$(git show '@{u}:scripts/deploy.sh' 2>/dev/null | sed -n 's/^DEPLOY_AUTHORISATION="\(.*\)"$/\1/p' || true)"
+    authorised="$(git show "$TARGET:scripts/deploy.sh" 2>/dev/null | sed -n 's/^DEPLOY_AUTHORISATION="\(.*\)"$/\1/p' || true)"
     if [[ ! "${FLIGHTHUB_DEPLOY_AUTHORIZED:-}" =~ ^yes-[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z]{2,4}$ ]] \
         || [ "${FLIGHTHUB_DEPLOY_AUTHORIZED}" != "$authorised" ]; then
         cat >&2 <<'BLOCKED'
 REFUSING TO DEPLOY: this deploy is not yet authorised (D-049).
 
-The script accepts exactly one token: DEPLOY_AUTHORISATION in scripts/deploy.sh of the commit being
-deployed (origin's branch, fetched just now). Write it in the commit that prepares the deploy:
+The script accepts exactly one token: DEPLOY_AUTHORISATION in scripts/deploy.sh of the commit
+being deployed (the upstream commit, fetched just now). Write it in the commit that prepares the
+deploy:
 
     DEPLOY_AUTHORISATION="yes-<YYYY-MM-DD>-<initials>"
 
@@ -221,9 +283,24 @@ BLOCKED
         exit 1
     fi
 
+    # A changed deploy.sh is re-run once, BEFORE maintenance and before the DDL prompt, from a
+    # copy of TARGET's version in the deploy folder (the working tree is not touched yet).
+    if [ "${FLIGHTHUB_DEPLOY_REEXEC:-}" != "1" ] \
+        && [ "$(git rev-parse "$TARGET:scripts/deploy.sh")" != "$(git rev-parse "HEAD:scripts/deploy.sh")" ]; then
+        mkdir -p "$DEPLOY_DIR"
+        chmod 700 "$DEPLOY_DIR"
+        local rerun
+        rerun="$(mktemp "$DEPLOY_DIR/deploy-rerun.XXXXXX")"
+        git show "$TARGET:scripts/deploy.sh" > "$rerun"
+        chmod 700 "$rerun"
+        echo "  scripts/deploy.sh differs in the commit being deployed: running that version once ($rerun)."
+        trap - EXIT
+        FLIGHTHUB_DEPLOY_REEXEC=1 FLIGHTHUB_DEPLOY_TARGET="$TARGET" exec bash "$rerun"
+    fi
+
     # The DDL credentials are checked HERE, before maintenance, as KIA PULSE learned: a missing
     # variable found after `artisan down` is an outage with no purpose. Not exported, not reused
-    # beyond the three assignment prefixes below.
+    # beyond the assignment prefixes below.
     DDL_USER="${FLIGHTHUB_DB_DDL_USER:-}"
     [ -n "$DDL_USER" ] || refuse "Set FLIGHTHUB_DB_DDL_USER (the DDL user, e.g. sysrac_fhddl): required before maintenance goes on."
     if [ -n "${FLIGHTHUB_DB_DDL_PASSWORD:-}" ]; then
@@ -236,12 +313,60 @@ BLOCKED
     unset FLIGHTHUB_DB_DDL_PASSWORD
     [ -n "$DDL_PASS" ] || refuse "No DDL password (FLIGHTHUB_DB_DDL_PASSWORD or the prompt): required before maintenance goes on."
 
-    # A wrong password is found now, not at the migrations. On the first install there is no
-    # vendor/ yet: checked after composer, still before maintenance.
     if [ -f "$APP_DIR/vendor/autoload.php" ]; then
+        # A wrong password is found now, with the code on disk, not at the migrations.
         ddl_login >/dev/null || refuse "The DDL login failed with these credentials (hub:preflight --ddl-login)."
-        DDL_VERIFIED="yes"
+    else
+        FIRST_INSTALL="yes"
     fi
+}
+
+maintenance_on() {
+    step "Maintenance mode"
+    # `--secret` is a bypass for THIS deploy only, used by the serving check; it dies with `up`.
+    # The trap is armed AFTER this on purpose: if `down` failed, the site is not in maintenance.
+    BYPASS_VALUE="$("$PHP" -r 'echo bin2hex(random_bytes(16));')"
+    if ! "$PHP" artisan down --render="errors::503" --retry=15 --secret="$BYPASS_VALUE" >/dev/null; then
+        echo "" >&2
+        if [ "$FILES_CHANGED" = "yes" ]; then
+            echo "✗ Could not enter maintenance mode. First install: nothing is live and the database has not" >&2
+            echo "  been touched. Fix the cause and re-run scripts/deploy.sh." >&2
+        else
+            echo "✗ Could not enter maintenance mode. NOTHING has been changed: the site is still live and the" >&2
+            echo "  database has not been touched. Fix the cause and re-run scripts/deploy.sh." >&2
+        fi
+        trap - EXIT
+        exit 1
+    fi
+    trap on_failure EXIT
+}
+
+# A poll, re-apply or backfill that started before maintenance may still be writing; the scheduler
+# starts none in maintenance mode. No file changes until it has finished.
+wait_for_jobs() {
+    step "Waiting for running jobs"
+    local waited=0
+    while pgrep -u "$(id -u)" -f "artisan'? hub:(poll|reapply-corrections|backfill)" >/dev/null 2>&1; do
+        if [ "$waited" -ge "$JOB_WAIT_SECONDS" ]; then
+            echo "" >&2
+            echo "✗ A hub:poll, hub:reapply-corrections or hub:backfill is still running after ${JOB_WAIT_SECONDS} s." >&2
+            "$PHP" artisan up >/dev/null
+            trap - EXIT
+            if [ "$FILES_CHANGED" = "yes" ]; then
+                echo "  First install: nothing is live and the database has not been touched; maintenance has been lifted." >&2
+            else
+                echo "  NOTHING has been changed (code and database as before); maintenance has been lifted." >&2
+            fi
+            echo "  Re-run scripts/deploy.sh when the job has finished." >&2
+            exit 1
+        fi
+        if [ "$waited" -eq 0 ]; then
+            echo "  A poll, re-apply or backfill is running: waiting for it (up to ${JOB_WAIT_SECONDS} s)."
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    echo "  No job running."
 }
 
 main() {
@@ -254,44 +379,24 @@ main() {
     trap before_maintenance_failure EXIT
     preconditions
 
-    step "Pull"
-    local before after
-    before="$(script_sum)"
-    git pull --ff-only
-    PULLED="yes"
-    after="$(script_sum)"
-    if [ "$before" != "$after" ]; then
-        if [ "${FLIGHTHUB_DEPLOY_REEXEC:-}" = "1" ]; then
-            echo "  scripts/deploy.sh changed again after the re-run; continuing with this copy (no second re-run)."
-        else
-            echo "  scripts/deploy.sh changed in this pull: re-running the new version once (preconditions again)."
-            trap - EXIT
-            FLIGHTHUB_DEPLOY_REEXEC=1 exec bash "$APP_DIR/scripts/deploy.sh"
-        fi
-    fi
-
-    step "Dependencies (production only)"
-    "$PHP" "$COMPOSER_BIN" install --no-dev --optimize-autoloader --no-interaction
-
-    if [ "$DDL_VERIFIED" != "yes" ]; then
+    if [ "$FIRST_INSTALL" = "yes" ]; then
+        # Nothing is live yet: the code and vendor/ first (artisan needs them), then the DDL login.
+        step "Updating the code (first install)"
+        update_code
+        step "Dependencies (first install)"
+        composer_install
         step "DDL login (first install)"
         ddl_login >/dev/null || refuse "The DDL login failed with these credentials (hub:preflight --ddl-login)."
-        DDL_VERIFIED="yes"
+        maintenance_on
+        wait_for_jobs
+    else
+        maintenance_on
+        wait_for_jobs
+        step "Updating the code"
+        update_code
+        step "Dependencies (production only)"
+        composer_install
     fi
-
-    step "Maintenance mode"
-    # `--secret` is a bypass for THIS deploy only, used by the serving check; it dies with `up`.
-    # The trap is armed AFTER this on purpose: if `down` failed, the site is not in maintenance.
-    local bypass_value
-    bypass_value="$("$PHP" -r 'echo bin2hex(random_bytes(16));')"
-    if ! "$PHP" artisan down --render="errors::503" --retry=15 --secret="$bypass_value" >/dev/null; then
-        echo "" >&2
-        echo "✗ Could not enter maintenance mode. The database has NOT been touched and the site is still live" >&2
-        echo "  (running the pulled code). Fix the cause and re-run scripts/deploy.sh." >&2
-        trap - EXIT
-        exit 1
-    fi
-    trap on_failure EXIT
 
     step "Clearing the config cache"
     # A config cache from the previous deploy would make Laravel ignore the DDL assignment prefix
@@ -346,7 +451,7 @@ main() {
     # middleware both accept it, whatever the path.
     local live_url bypass root health
     live_url="$("$PHP" -r 'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); echo rtrim((string) config("app.url"), "/");')"
-    bypass="$("$PHP" scripts/maintenance-bypass-cookie.php "$bypass_value")"
+    bypass="$("$PHP" scripts/maintenance-bypass-cookie.php "$BYPASS_VALUE")"
     root="$(curl -sS --max-time 20 -b "laravel_maintenance=$bypass" -o /dev/null -w '%{http_code}' "$live_url/" 2>/dev/null || true)"
     health="$(curl -sS --max-time 20 -b "laravel_maintenance=$bypass" -o /dev/null -w '%{http_code}' "$live_url/api/v1/health" 2>/dev/null || true)"
     root="${root:-000}"
@@ -390,7 +495,7 @@ main() {
     "$PHP" artisan up
     trap - EXIT
 
-    echo "==> Done. Deploy complete."
+    echo "==> Done. Deployed $(short "$TARGET") (was $(short "$PREVIOUS"))."
 }
 
 main "$@"
