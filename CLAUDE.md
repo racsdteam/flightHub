@@ -59,7 +59,16 @@ subdomain is bought, D-061), credentials.
   own threads) and prints only their time and command, never the query text, host or user; exit 0
   none, 1 some, 2 unreadable. deploy.sh runs it every 2 s after down (maintenance answers web
   requests before PHP connects, so the connections left are CLI jobs); still connected after
-  FLIGHTHUB_JOB_WAIT_SECONDS (120) or unreadable: artisan up, nothing changed, stop.
+  FLIGHTHUB_JOB_WAIT_SECONDS (120) or unreadable: artisan up, nothing changed, stop; but a run
+  that found maintenance already on (a re-run after a stopped deploy) never lifts it before the
+  end.
+- The grants pause: deploy.sh first discards any input already waiting (an Enter pressed during
+  the migrations once skipped the pause, 22 Nov), then goes on only when the operator types done
+  (any case) and Enter; anything else asks again; the end of the input stops the deploy. Root
+  runs the grants file in WHM → SQL Services → phpMyAdmin, not cPanel's phpMyAdmin.
+- No artisan before the first deploy (no vendor/ yet): APP_KEY is generated with PHP's
+  random_bytes and written with sed (docs/DEPLOY.md step 5). A re-run with the same token is
+  allowed while the server is already on the authorised commit.
 - First install (no vendor/, nothing live): code and composer first, then the DDL login and
   maintenance; no running-jobs wait (nothing runs yet). First deploy only: create the first
   admin with php artisan hub:admin-create {email} {name} --role=admin (temporary password
@@ -103,16 +112,21 @@ subdomain is bought, D-061), credentials.
   a route cache under a base path, SESSION_PATH ≠ the base path, a missing or refused
   SESSION_COOKIE, and a public/.htaccess without the ea-php83 handler, DirectoryIndex or the
   HTTPS rule (D-062).
-- HTTPS only (D-062): public/.htaccess redirects plain HTTP to HTTPS (RewriteCond %{HTTPS} !=on,
-  RewriteCond %{HTTP:X-Forwarded-SSL} !on, RewriteRule !^api/ … [R=301,L]: relative to the
-  folder, so it works under /flighthub and at a domain root); the API is never redirected.
+- HTTPS only (D-062): public/.htaccess redirects plain HTTP to HTTPS (RewriteCond
+  %{ENV:REDIRECT_STATUS} ^$, RewriteCond %{HTTPS} !=on, RewriteCond %{HTTP:X-Forwarded-SSL} !on,
+  RewriteRule !^api/ … [R=301,L]: relative to the folder, so it works under /flighthub and at a
+  domain root); the API is never redirected.
+- The .htaccess second pass: in a per-directory .htaccess, after a rewrite (the front controller's
+  "RewriteRule ^ index.php [L]"), mod_rewrite runs the rules again on the new path. A rule meant
+  for the original request must say so (RewriteCond %{ENV:REDIRECT_STATUS} ^$); without it the
+  HTTPS rule matched "index.php" and redirected the API (first deploy, 22 Nov).
 
 ## Database
 - Runtime user = default connection `mariadb`: data access only; NO UPDATE/DELETE on history
   tables (append-only, enforced by per-table grants AND triggers).
 - DDL user = connection `mariadb_ddl`: migrations only
   (php artisan migrate --database=mariadb_ddl).
-- Per-table GRANTs are run by Dany as root (WHM → phpMyAdmin). Any command that lists tables
+- Per-table GRANTs are run by Dany as root (WHM → SQL Services → phpMyAdmin). Any command that lists tables
   for grants reads them as the DDL user — the runtime user cannot see new tables.
 - All times stored in UTC (connection time zone +00:00, app.timezone UTC); displayed in
   Africa/Kigali (UTC+2).
@@ -191,7 +205,8 @@ subdomain is bought, D-061), credentials.
 - Alerts (hub:check-feed, D-041, D-055, D-058): the feed turning stale or recovering, and the
   backup (newest manifest in FLIGHTHUB_BACKUP_DIR older than 26 hours, or none; off while
   empty), each with its own state: one mail per address when it turns stale and one when it
-  recovers, to the active admins and ALERT_EXTRA_RECIPIENTS. Never a dump's contents.
+  recovers, to the active admins and ALERT_EXTRA_RECIPIENTS. Never a dump's contents. Sent from
+  no_reply@systems.rac.co.rw (KIA PULSE's mailbox) through systems.rac.co.rw port 25 (D-063).
 
 ## AODB API
 - Innov'ATM "Airport Keeper External API" v3.2.5; spec committed in

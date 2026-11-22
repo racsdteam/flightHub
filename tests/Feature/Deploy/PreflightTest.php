@@ -189,7 +189,8 @@ class PreflightTest extends PollTestCase
     }
 
     /**
-     * B4 (D-062): the three lines, in order; one missing or out of order FAILs.
+     * B4 (D-062), Batch 7f: the four lines, in order; one missing or out of order FAILs, and so
+     * does the 7d rule without the REDIRECT_STATUS line (it redirected the API on the second pass).
      */
     public function test_the_https_rule_must_be_whole(): void
     {
@@ -197,11 +198,15 @@ class PreflightTest extends PollTestCase
         $this->assertStringContainsString(implode("\n    ", Preflight::HTACCESS_HTTPS_RULE), $file, 'committed inside the mod_rewrite block');
         $this->assertLessThan(strpos($file, 'RewriteRule ^ index.php [L]'), strpos($file, Preflight::HTACCESS_HTTPS_RULE[2]), 'before Laravel\'s own rules');
 
+        $this->assertSame('RewriteCond %{ENV:REDIRECT_STATUS} ^$', Preflight::HTACCESS_HTTPS_RULE[0]);
+
         foreach ([
-            str_replace(Preflight::HTACCESS_HTTPS_RULE[1]."\n", '', $file),
-            str_replace(Preflight::HTACCESS_HTTPS_RULE[0]."\n    ".Preflight::HTACCESS_HTTPS_RULE[1], Preflight::HTACCESS_HTTPS_RULE[1]."\n    ".Preflight::HTACCESS_HTTPS_RULE[0], $file),
-            str_replace(Preflight::HTACCESS_HTTPS_RULE[2], '# '.Preflight::HTACCESS_HTTPS_RULE[2], $file),
+            str_replace(Preflight::HTACCESS_HTTPS_RULE[0]."\n", '', $file),
+            str_replace(Preflight::HTACCESS_HTTPS_RULE[2]."\n", '', $file),
+            str_replace(Preflight::HTACCESS_HTTPS_RULE[1]."\n    ".Preflight::HTACCESS_HTTPS_RULE[2], Preflight::HTACCESS_HTTPS_RULE[2]."\n    ".Preflight::HTACCESS_HTTPS_RULE[1], $file),
+            str_replace(Preflight::HTACCESS_HTTPS_RULE[3], '# '.Preflight::HTACCESS_HTTPS_RULE[3], $file),
         ] as $i => $htaccess) {
+            $this->assertNotSame($file, $htaccess, "variant {$i} changes the file");
             $this->probe->htaccess = $htaccess;
             $this->assertSame('FAIL', $this->preflight(1)['public/.htaccess redirects plain HTTP to HTTPS, not the API'], "variant {$i}");
         }

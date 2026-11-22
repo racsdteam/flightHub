@@ -23,6 +23,11 @@ DirectoryIndex index.php
     # relative to this folder (works under /flighthub and at a domain root). Never the API: it
     # answers plain HTTP with 403 (app/Http/Middleware/ApiGate.php), so a client configured
     # with http:// fails visibly instead of sending its key in clear. hub:preflight checks it.
+    # Only the original request (REDIRECT_STATUS empty): after "Send Requests To Front
+    # Controller" rewrites to index.php, mod_rewrite runs these rules a second time on
+    # "index.php", which !^api/ matches; without this line an API call over plain HTTP was
+    # redirected with the original address (first deploy, 22 Nov).
+    RewriteCond %{ENV:REDIRECT_STATUS} ^$
     RewriteCond %{HTTPS} !=on
     RewriteCond %{HTTP:X-Forwarded-SSL} !on
     RewriteRule !^api/ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]

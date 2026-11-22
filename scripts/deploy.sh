@@ -62,6 +62,7 @@ HTTP_CONTENT_TYPE=""
 BAD_COOKIES=""
 FIRST_INSTALL="no"
 FILES_CHANGED="no"
+WAS_DOWN="no"
 
 # Nothing from the operator's shell may reach the config cache or replace the .env: the DDL
 # credentials travel only as an assignment prefix on the commands that need them.
@@ -124,6 +125,12 @@ on_failure() {
     echo "  Previous commit: $PREVIOUS"
     echo "  Target commit:   $TARGET"
     echo ""
+    if [ "$FILES_CHANGED" = "no" ] && [ "$WAS_DOWN" = "yes" ]; then
+        echo "  This run changed nothing, but maintenance was already on when it started (a previous deploy"
+        echo "  stopped): read that deploy's message before lifting it."
+        echo ""
+        exit "$code"
+    fi
     if [ "$FILES_CHANGED" = "no" ]; then
         echo "  NOTHING CHANGED: the code is still the previous commit and the database was not touched."
         echo "  It is safe to serve again:"
@@ -146,7 +153,7 @@ on_failure() {
             echo "  whole and matches the target commit: fix forward and re-run, do not return to the previous commit."
             if [ "$CURRENT_STEP" = "Grants" ]; then
                 echo "  The runtime user's grants do not match config/grants.php yet: run the grants file as root"
-                echo "  (phpMyAdmin), then $PHP artisan hub:check-grants."
+                echo "  (WHM → SQL Services → phpMyAdmin), then $PHP artisan hub:check-grants."
             fi
             if [ "$CURRENT_STEP" = "Caches" ]; then
                 echo ""
@@ -200,7 +207,9 @@ scripts/deploy.sh --dry-run: the steps of a deploy (nothing is run).
   5. Config cache    artisan config:clear (so the DDL prefix below reaches the config)
   6. Migrations      DB_DDL_USERNAME=… DB_DDL_PASSWORD=… artisan migrate --database=mariadb_ddl --force
   7. Grants          hub:check-grants; when they differ: hub:grants-sql (DDL prefix) to
-                     $DEPLOY_DIR/grants-<time>.sql (mode 600), pause until run as root, check again
+                     $DEPLOY_DIR/grants-<time>.sql (mode 600); pause: input already waiting is
+                     discarded, then "done" must be typed once root has run the file in
+                     WHM → SQL Services → phpMyAdmin; check again
   8. Re-apply        artisan hub:reapply-corrections
   9. Caches          config/route/view/event:clear, clear-compiled; config/view/event:cache;
                      route:cache only when hub.base_path is empty (never under /flighthub, D-061)
@@ -220,6 +229,29 @@ STEPS
 # One value of the application's config, as it will be served (the config cache once built).
 app_config() {
     "$PHP" -r 'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); echo (string) config($argv[1]);' "$1"
+}
+
+# The grants pause. On the first deploy an Enter already waiting (pressed during the migrations)
+# answered "Press Enter" at once, and the second check ran before root had run the file. So any
+# input already waiting is discarded first; then only "done" (any case) and Enter go on, and
+# anything else asks again. The end of the input stops the deploy (maintenance stays on).
+grants_pause() {
+    local answer
+    while IFS= read -r -t 1 answer; do :; done
+    while :; do
+        printf '  Type done and press Enter once the file has run as root: '
+        if ! IFS= read -r answer; then
+            echo ""
+            echo "✗ No \"done\" was typed (the input ended): the grants were not confirmed." >&2
+            exit 1
+        fi
+        answer="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')"
+        answer="${answer#"${answer%%[![:space:]]*}"}"
+        answer="${answer%"${answer##*[![:space:]]}"}"
+        [ "$answer" = "done" ] && break
+        echo "  Not \"done\". Type done once root has run the file (Ctrl-C stops the deploy; maintenance stays on)."
+    done
+    echo ""
 }
 
 ddl_login() {
@@ -344,6 +376,13 @@ BLOCKED
 
 maintenance_on() {
     step "Maintenance mode"
+    # Already down: a previous deploy stopped after maintenance went on (a re-run with the same
+    # token). Then this run never lifts maintenance by itself before the end: what the previous
+    # run left is not known to be safe to serve.
+    if [ -f "$APP_DIR/storage/framework/down" ]; then
+        WAS_DOWN="yes"
+        echo "  Maintenance is already on (a previous deploy stopped): this run lifts it only at the end."
+    fi
     # `--secret` is a bypass for THIS deploy only, used by the serving check; it dies with `up`.
     # The trap is armed AFTER this on purpose: if `down` failed, the site is not in maintenance.
     BYPASS_VALUE="$("$PHP" -r 'echo bin2hex(random_bytes(16));')"
@@ -401,11 +440,18 @@ wait_for_jobs() {
     echo "  No other connection to the hub's database: no job is running."
 }
 
-# The wait failed: maintenance is lifted at once, because nothing has changed yet.
+# The wait failed: maintenance is lifted at once, because nothing has changed yet, unless it was
+# already on when this run started (then what a previous deploy left stays behind maintenance).
 lift_maintenance_unchanged() {
-    "$PHP" artisan up >/dev/null
-    trap - EXIT
-    echo "  NOTHING has been changed (code and database as before); maintenance has been lifted." >&2
+    if [ "$WAS_DOWN" = "yes" ]; then
+        trap - EXIT
+        echo "  This run changed nothing. Maintenance was already on when it started (a previous deploy" >&2
+        echo "  stopped), so it stays on: read that deploy's message before lifting it." >&2
+    else
+        "$PHP" artisan up >/dev/null
+        trap - EXIT
+        echo "  NOTHING has been changed (code and database as before); maintenance has been lifted." >&2
+    fi
     echo "  Re-run scripts/deploy.sh when the job has finished." >&2
     exit 1
 }
@@ -623,11 +669,10 @@ main() {
         (umask 077 && DB_DDL_USERNAME="$DDL_USER" DB_DDL_PASSWORD="$DDL_PASS" "$PHP" artisan hub:grants-sql > "$grants_file")
         chmod 600 "$grants_file"
         echo ""
-        echo "  The grants changed. As root (WHM → phpMyAdmin → SQL), paste and run the whole file:"
+        echo "  The grants changed. As root, in WHM → SQL Services → phpMyAdmin (not cPanel's phpMyAdmin),"
+        echo "  open the SQL tab, paste the whole file and run it:"
         echo "      $grants_file"
-        printf '  Press Enter once it has run... '
-        read -r _ || true
-        echo ""
+        grants_pause
         "$PHP" artisan hub:check-grants
     fi
 

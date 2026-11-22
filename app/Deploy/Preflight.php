@@ -37,8 +37,13 @@ final class Preflight
     /** cPanel's per-directory handler line in public/.htaccess (the account's default PHP is 8.2). */
     public const HTACCESS_HANDLER = 'AddHandler application/x-httpd-ea-php83 .php .php8 .phtml';
 
-    /** D-062: public/.htaccess redirects plain HTTP to HTTPS, never the API (three lines, in order). */
+    /**
+     * D-062: public/.htaccess redirects plain HTTP to HTTPS, never the API (four lines, in order).
+     * The first line limits it to the original request: on the second pass after the
+     * front-controller rewrite, !^api/ matches "index.php" (first deploy, 22 Nov).
+     */
     public const HTACCESS_HTTPS_RULE = [
+        'RewriteCond %{ENV:REDIRECT_STATUS} ^$',
         'RewriteCond %{HTTPS} !=on',
         'RewriteCond %{HTTP:X-Forwarded-SSL} !on',
         'RewriteRule !^api/ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]',
@@ -127,7 +132,7 @@ final class Preflight
         $this->check('public/.htaccess has DirectoryIndex index.php', in_array('DirectoryIndex index.php', $lines, true));
         $this->check('public/.htaccess redirects plain HTTP to HTTPS, not the API', function () use ($lines) {
             foreach (array_keys($lines, self::HTACCESS_HTTPS_RULE[0], true) as $i) {
-                if (array_slice($lines, $i, 3) === self::HTACCESS_HTTPS_RULE) {
+                if (array_slice($lines, $i, count(self::HTACCESS_HTTPS_RULE)) === self::HTACCESS_HTTPS_RULE) {
                     return true;
                 }
             }

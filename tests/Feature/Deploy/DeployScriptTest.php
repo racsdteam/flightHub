@@ -3,6 +3,7 @@
 namespace Tests\Feature\Deploy;
 
 use Illuminate\Support\Facades\File;
+use Symfony\Component\Process\InputStream;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
@@ -47,7 +48,11 @@ class DeployScriptTest extends TestCase
         File::makeDirectory($this->dir.'/app/vendor', 0755, true);
         File::makeDirectory($this->dir.'/bin', 0755, true);
         File::put($this->dir.'/app/vendor/autoload.php', "<?php\n");
-        File::put($this->dir.'/app/scripts/deploy.sh', str_replace('DEPLOY_AUTHORISATION="not-yet-authorised"', 'DEPLOY_AUTHORISATION="'.self::TOKEN.'"', File::get(base_path('scripts/deploy.sh'))));
+        // The copy carries the test token, whatever the committed line holds (the placeholder, or
+        // the token of the deploy Dany prepared).
+        File::put($this->dir.'/app/scripts/deploy.sh', self::scriptWithAuthorisation(self::TOKEN));
+        // The runtime grants match unless a test says otherwise (the pause has its own tests).
+        touch($this->dir.'/grants-applied');
         File::put($this->dir.'/log', '');
         File::put($this->dir.'/bin/composer', "composer stub\n");
 
@@ -72,7 +77,8 @@ class DeployScriptTest extends TestCase
                 echo "artisan $* ddl=$ddl" >> "$STUB_LOG"
                 case "$1" in
                   hub:check-grants) [ -f "$STUB_DIR/grants-applied" ] && exit 0; echo "hub:check-grants: polls: missing SELECT" >&2; exit 1 ;;
-                  hub:grants-sql) touch "$STUB_DIR/grants-applied"; echo "GRANT SELECT, INSERT ON \`sysrac_flighthub\`.\`polls\` TO 'sysrac_fhapp'@'localhost';" ;;
+                  # STUB_GRANTS_BY_ROOT: the grants apply only when the test types done (root ran the file).
+                  hub:grants-sql) [ -n "${STUB_GRANTS_BY_ROOT:-}" ] || touch "$STUB_DIR/grants-applied"; echo "GRANT SELECT, INSERT ON \`sysrac_flighthub\`.\`polls\` TO 'sysrac_fhapp'@'localhost';" ;;
                   hub:preflight) if [ "${2:-}" = "--ddl-login" ]; then [ "${STUB_DDL_LOGIN:-ok}" = ok ]; exit $?; fi; [ "${STUB_PREFLIGHT:-ok}" = ok ] ;;
                   down) [ "${STUB_DOWN:-ok}" = ok ] ;;
                   migrate) [ "${STUB_MIGRATE:-ok}" = ok ] ;;
@@ -111,7 +117,7 @@ class DeployScriptTest extends TestCase
                   '@{u}^{commit}')
                     # A push lands right after the first resolution: a second one would see it.
                     if [ -f "$STUB_DIR/pushed" ]; then echo cccccccccccccccccccccccccccccccccccccccc; else touch "$STUB_DIR/pushed"; echo "$target"; fi ;;
-                  HEAD) echo bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
+                  HEAD) echo "${STUB_HEAD:-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}" ;;
                   HEAD:scripts/deploy.sh) echo 1111111111111111111111111111111111111111 ;;
                   *:scripts/deploy.sh) if [ -n "${STUB_SCRIPT_CHANGED:-}" ]; then echo 2222222222222222222222222222222222222222; else echo 1111111111111111111111111111111111111111; fi ;;
                 esac ;;
@@ -172,7 +178,62 @@ class DeployScriptTest extends TestCase
     {
         File::put($this->dir.'/log', '');
         File::delete($this->dir.'/pushed');
-        $process = new Process(['bash', $script ?? $this->dir.'/app/scripts/deploy.sh', ...$args], $this->dir, $env + [
+        $process = new Process(['bash', $script ?? $this->dir.'/app/scripts/deploy.sh', ...$args], $this->dir, $this->environment($env), $stdin);
+        $process->setTimeout(60)->run();
+
+        return $this->outcome($process);
+    }
+
+    private const DONE_PROMPT = 'Type done and press Enter once the file has run as root: ';
+
+    /**
+     * A deploy at a terminal: $stdin is already waiting when the script starts (an Enter pressed
+     * early); each reply is typed only once the grants pause has asked. A reply of "done" first
+     * plays root running the grants file (with STUB_GRANTS_BY_ROOT, the grants apply only then).
+     * No reply left: the input ends.
+     *
+     * @param  array<string, string|false>  $env
+     * @param  list<string>  $replies
+     * @return array{code: int, out: string, log: list<string>}
+     */
+    private function deployAtTerminal(array $env, string $stdin, array $replies): array
+    {
+        File::put($this->dir.'/log', '');
+        File::delete($this->dir.'/pushed');
+        $input = new InputStream;
+        $process = new Process(['bash', $this->dir.'/app/scripts/deploy.sh'], $this->dir, $this->environment($env), $input);
+        $process->setTimeout(60)->start();
+        $input->write($stdin);
+        $asked = 0;
+        while ($process->isRunning()) {
+            usleep(50_000);
+            if (substr_count($process->getOutput(), self::DONE_PROMPT) > $asked) {
+                $asked++;
+                if ($replies === []) {
+                    $input->close();
+
+                    continue;
+                }
+                $reply = array_shift($replies);
+                if (strtolower(trim($reply)) === 'done') {
+                    touch($this->dir.'/grants-applied');
+                }
+                $input->write($reply);
+            }
+        }
+        $input->close();
+        $process->wait();
+
+        return $this->outcome($process);
+    }
+
+    /**
+     * @param  array<string, string|false>  $env
+     * @return array<string, string|false>
+     */
+    private function environment(array $env): array
+    {
+        return $env + [
             'PATH' => $this->dir.'/bin:/usr/bin:/bin',
             'HOME' => $this->dir,
             'STUB_LOG' => $this->dir.'/log',
@@ -185,8 +246,14 @@ class DeployScriptTest extends TestCase
             'FLIGHTHUB_DB_DDL_USER' => 'sysrac_fhddl',
             'FLIGHTHUB_DEPLOY_REEXEC' => false,
             'FLIGHTHUB_DEPLOY_TARGET' => false,
-        ], $stdin);
-        $process->setTimeout(60)->run();
+        ];
+    }
+
+    /**
+     * @return array{code: int, out: string, log: list<string>}
+     */
+    private function outcome(Process $process): array
+    {
         $log = array_values(array_filter(explode("\n", (string) File::get($this->dir.'/log'))));
 
         return ['code' => (int) $process->getExitCode(), 'out' => $process->getOutput().$process->getErrorOutput(), 'log' => $log];
@@ -213,13 +280,23 @@ class DeployScriptTest extends TestCase
         self::assertSame($sorted, $positions, implode("\n", $log));
     }
 
-    public function test_the_committed_token_refuses_every_deploy(): void
+    /** The committed script with its DEPLOY_AUTHORISATION line set to the given value. */
+    private static function scriptWithAuthorisation(string $value): string
     {
-        $this->assertStringContainsString("\nDEPLOY_AUTHORISATION=\"not-yet-authorised\"\n", File::get(base_path('scripts/deploy.sh')));
+        return (string) preg_replace('/^DEPLOY_AUTHORISATION=".*"$/m', 'DEPLOY_AUTHORISATION="'.$value.'"', File::get(base_path('scripts/deploy.sh')), 1);
+    }
 
-        // The commit being deployed carries the committed value: every token is refused.
+    public function test_the_placeholder_token_refuses_every_deploy(): void
+    {
+        // Committed: the placeholder, or the one token Dany wrote in the commit that prepares a
+        // deploy (yes-<YYYY-MM-DD>-<initials>), never anything else.
+        $this->assertMatchesRegularExpression('/\nDEPLOY_AUTHORISATION="(not-yet-authorised|yes-\d{4}-\d{2}-\d{2}-[a-z]{2,4})"\n/', File::get(base_path('scripts/deploy.sh')));
+
+        // A commit carrying the placeholder: every token is refused.
+        $placeholder = $this->dir.'/placeholder-deploy.sh';
+        File::put($placeholder, self::scriptWithAuthorisation('not-yet-authorised'));
         foreach ([false, self::TOKEN, 'not-yet-authorised', 'yes'] as $token) {
-            $run = $this->deploy(['FLIGHTHUB_DEPLOY_AUTHORIZED' => $token, 'STUB_UPSTREAM' => base_path('scripts/deploy.sh')], script: base_path('scripts/deploy.sh'));
+            $run = $this->deploy(['FLIGHTHUB_DEPLOY_AUTHORIZED' => $token, 'STUB_UPSTREAM' => $placeholder], script: $placeholder);
 
             $this->assertSame(1, $run['code']);
             $this->assertStringContainsString('REFUSING TO DEPLOY: this deploy is not yet authorised (D-049).', $run['out']);
@@ -288,7 +365,10 @@ class DeployScriptTest extends TestCase
     public function test_a_full_deploy_puts_maintenance_on_before_any_file_changes(): void
     {
         // The password is typed; the operator's shell also exports a stray DB_DDL_PASSWORD, which the script drops.
-        $run = $this->deploy(['DB_DDL_PASSWORD' => 'stray-shell-value'], stdin: self::DDL_PASSWORD."\n\n");
+        // The grants differ (first install of the tables): the pause waits for root and "done";
+        // the Enter pressed early (after the password) is discarded, not taken as the answer.
+        File::delete($this->dir.'/grants-applied');
+        $run = $this->deployAtTerminal(['DB_DDL_PASSWORD' => 'stray-shell-value', 'STUB_GRANTS_BY_ROOT' => '1'], self::DDL_PASSWORD."\n\n", ["done\n"]);
 
         $this->assertSame(0, $run['code'], $run['out']);
         $this->assertStringContainsString('==> Done. Deployed aaaaaaaaaaaa (was bbbbbbbbbbbb).', $run['out']);
@@ -357,6 +437,77 @@ class DeployScriptTest extends TestCase
         $this->assertStringNotContainsString(self::PUSHED_LATER, implode("\n", $run['log']).$run['out']);
     }
 
+    /**
+     * Batch 7f (first deploy, 22 Nov): an Enter already waiting answered "Press Enter" at once and
+     * the second check ran before root had run the file. Waiting input is discarded; only "done"
+     * (any case) goes on; anything else asks again. The grants apply only when the test types
+     * done, so a check before it would fail.
+     */
+    public function test_the_grants_pause_discards_waiting_input_and_wants_done(): void
+    {
+        File::delete($this->dir.'/grants-applied');
+
+        $run = $this->deployAtTerminal(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'STUB_GRANTS_BY_ROOT' => '1'], "\n\n", ["yes\n", "\n", "  Done \n"]);
+
+        $this->assertSame(0, $run['code'], $run['out']);
+        $this->assertSame(3, substr_count($run['out'], self::DONE_PROMPT), 'asked until done');
+        $this->assertSame(2, substr_count($run['out'], 'Not "done". Type done once root has run the file'));
+        $this->assertStringContainsString('As root, in WHM → SQL Services → phpMyAdmin (not cPanel\'s phpMyAdmin),', $run['out']);
+        self::assertInOrder($run['log'], ['artisan hub:check-grants ddl=no', 'artisan hub:grants-sql ddl=yes', 'artisan hub:reapply-corrections ddl=no']);
+        $this->assertCount(2, self::grep($run['log'], '/^artisan hub:check-grants/'), 'checked again only after done');
+    }
+
+    public function test_the_end_of_the_input_at_the_grants_pause_stops_with_maintenance_on(): void
+    {
+        File::delete($this->dir.'/grants-applied');
+
+        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'STUB_GRANTS_BY_ROOT' => '1'], stdin: "\n");
+
+        $this->assertSame(1, $run['code']);
+        $this->assertStringContainsString('No "done" was typed (the input ended): the grants were not confirmed.', $run['out']);
+        $this->assertStringContainsString('✗ DEPLOY FAILED during: Grants', $run['out']);
+        $this->assertStringContainsString('(WHM → SQL Services → phpMyAdmin), then', $run['out']);
+        $this->assertCount(1, self::grep($run['log'], '/^artisan hub:check-grants/'));
+        $this->assertSame([], self::grep($run['log'], '/^artisan (hub:reapply-corrections|up)/'));
+    }
+
+    /**
+     * Runbook, "When something goes wrong": the same token runs again when the server is already
+     * on the authorised commit (HEAD = TARGET: a commit is its own ancestor; the merge is a no-op).
+     */
+    public function test_a_re_run_on_the_authorised_commit_is_allowed_with_the_same_token(): void
+    {
+        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'STUB_HEAD' => self::TARGET]);
+
+        $this->assertSame(0, $run['code'], $run['out']);
+        $this->assertStringContainsString('Deploying aaaaaaaaaaaa (now aaaaaaaaaaaa).', $run['out']);
+        $this->assertStringContainsString('==> Done. Deployed aaaaaaaaaaaa (was aaaaaaaaaaaa).', $run['out']);
+        $this->assertNotSame([], self::grep($run['log'], '/^git merge-base --is-ancestor '.self::TARGET.' '.self::TARGET.'$/'));
+    }
+
+    /**
+     * A re-run while a previous deploy left maintenance on: when its wait gives up, this run never
+     * lifts maintenance (what the previous run left is not known to be safe to serve).
+     */
+    public function test_a_re_run_that_found_maintenance_on_never_lifts_it_when_the_wait_gives_up(): void
+    {
+        File::makeDirectory($this->dir.'/app/storage/framework', 0755, true);
+        File::put($this->dir.'/app/storage/framework/down', '{}');
+
+        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'STUB_JOBS' => 'forever', 'FLIGHTHUB_JOB_WAIT_SECONDS' => '2']);
+
+        $this->assertSame(1, $run['code']);
+        $this->assertStringContainsString('Maintenance is already on (a previous deploy stopped): this run lifts it only at the end.', $run['out']);
+        $this->assertStringContainsString('Maintenance was already on when it started (a previous deploy', $run['out']);
+        $this->assertSame([], self::grep($run['log'], '/^artisan up/'));
+        $this->assertSame([], self::grep($run['log'], '/^(git merge |php composer install|artisan migrate)/'));
+
+        // The same run with nothing connected goes to the end, and lifts it there.
+        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD]);
+        $this->assertSame(0, $run['code'], $run['out']);
+        $this->assertSame('artisan up ddl=no', end($run['log']));
+    }
+
     public function test_unchanged_grants_skip_the_pause(): void
     {
         touch($this->dir.'/grants-applied');
@@ -386,7 +537,7 @@ class DeployScriptTest extends TestCase
 
     public function test_a_changed_deploy_script_is_re_run_once_before_maintenance_and_the_ddl_prompt_for_the_same_target(): void
     {
-        // One password line and one Enter (grants): a second prompt would read the Enter and refuse.
+        // One password line and one Enter: a second DDL prompt would read the Enter and refuse.
         $run = $this->deploy(['STUB_SCRIPT_CHANGED' => '1'], stdin: self::DDL_PASSWORD."\n\n");
 
         $this->assertSame(0, $run['code'], $run['out']);
