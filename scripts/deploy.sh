@@ -41,7 +41,7 @@ set -euo pipefail
 #  upstream commit, fetched first; the fetch leaves the working tree alone), and TARGET is what
 #  gets deployed — a push after the fetch changes nothing.
 # ─────────────────────────────────────────────────────────────────────────────────────────────
-DEPLOY_AUTHORISATION="not-yet-authorised"
+DEPLOY_AUTHORISATION="yes-2026-11-22-dk"
 
 APP_DIR="${FLIGHTHUB_APP_DIR:-/home/sysrac/flight-hub}"
 DEPLOY_DIR="${FLIGHTHUB_DEPLOY_DIR:-/home/sysrac/flight-hub-deploy}"
