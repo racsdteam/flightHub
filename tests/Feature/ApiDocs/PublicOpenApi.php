@@ -12,7 +12,7 @@ final class PublicOpenApi extends OpenApi
 {
     public const FILE = ApiDocsController::DOCUMENT;
 
-    public const ID = 'https://flightdata.rac.co.rw/api/openapi.yaml';
+    public const ID = 'https://flighthub.invalid/api/openapi.yaml';
 
     protected static ?object $document = null;
 

@@ -98,6 +98,14 @@ class Probe
         return app()->routesAreCached();
     }
 
+    /** public/.htaccess as it is on disk, or null when there is none. */
+    public function htaccess(): ?string
+    {
+        $path = public_path('.htaccess');
+
+        return is_file($path) ? (string) file_get_contents($path) : null;
+    }
+
     /**
      * This run's process environment: inside deploy.sh the DDL credentials arrive this way (an
      * assignment prefix), never through the .env file or the config cache.

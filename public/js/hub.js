@@ -8,7 +8,9 @@
  *  - A Livewire request answered 419 (the session ended: deactivated, idle timeout, signed out
  *    elsewhere) goes to the sign-in page named by this script tag's data-session-ended, which
  *    says "Your session has ended", instead of Livewire's "This page has expired" dialog. The
- *    page's own path goes with it (?return=), so signing in returns there.
+ *    page's own path goes with it (?return=), so signing in returns there. That path is the
+ *    browser's, base path included (/flighthub/…, D-061): the server accepts only a path under
+ *    the base path and strips it (App\Admin\ReturnPath).
  */
 (function () {
     var sessionEnded = document.currentScript ? document.currentScript.getAttribute('data-session-ended') : null;

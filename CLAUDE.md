@@ -4,7 +4,8 @@
 Independent service of Rwanda Airports Company (RAC IT), Kigali International Airport.
 Collects KIA AODB data (Innov'ATM API), cleans it, keeps every change, detects changes and
 distributes it to other RAC systems through its own API. First consumer: KIA PULSE.
-Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw), credentials.
+Never depends on KIA PULSE: own repo, database, address (https://systems.rac.co.rw/flighthub until a
+subdomain is bought, D-061), credentials.
 
 ## How we work
 - Do only the batch you were given. No features, packages or screens it does not ask for;
@@ -47,7 +48,9 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   a changed deploy.sh re-run once from a copy, for the same TARGET; the DDL password asked once;
   the DDL login) → maintenance on, before any file changes → wait (≤ 120 s) for a running
   hub:poll / reapply / backfill → git merge --ff-only TARGET (never a pull) → composer install →
-  config:clear → migrations (DDL) → grants → re-apply → caches → serving check → preflight → up.
+  config:clear → migrations (DDL) → grants → re-apply → caches (route cache only when the base
+  path is empty) → serving check (APP_URL, APP_URL/, APP_URL/api/v1/health; no cookie outside
+  the base path) → preflight → up.
   First install (no vendor/, nothing live): code and composer first, then the DDL login and
   maintenance. First deploy only: create the first admin with php artisan
   hub:admin-create {email} {name} --role=admin (temporary password printed once).
@@ -65,6 +68,28 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   scheduler writes a heartbeat every minute, also in maintenance mode (hub:preflight warns after
   5 minutes).
 - App commands run as the cPanel account user, never root.
+
+## Base path (D-061)
+- Served at https://systems.rac.co.rw/flighthub until a subdomain is bought: public_html/flighthub
+  is a symlink to /home/sysrac/flight-hub/public. The host and the account are shared with
+  KIA PULSE (/pulse) and three other apps; never touch their files, cron lines, PHP settings or
+  cookies. public/.htaccess carries cPanel's ea-php83 handler block (the account's default PHP is
+  8.2; its MultiPHP setting is never changed), DirectoryIndex index.php and the Authorization rule.
+- hub.base_path = FLIGHTHUB_BASE_PATH (empty = domain root; production /flighthub), APP_URL's path.
+  The move to a subdomain is a config change only: APP_URL, FLIGHTHUB_BASE_PATH empty,
+  SESSION_PATH=/, and the APP_URL constant in App\Deploy\Preflight.
+- No root-absolute URL in views, CSS or JS: every URL goes through url() / asset() / route().
+  Every generated URL comes from APP_URL (URL::forceRootUrl and its scheme; https in production),
+  never from the request's Host header; routes are matched by Laravel's base-path detection
+  (SCRIPT_NAME /flighthub/index.php). tests/Feature/BasePath checks every page.
+- No cookie outside the base path: SESSION_PATH = the base path, SESSION_COOKIE =
+  flighthub_session (never laravel_session or kia_pulse_session).
+- No route cache under a base path (it answers 405 on /flighthub/).
+- HSTS stays exactly "max-age=31536000; includeSubDomains", KIA PULSE's value: the hub must not
+  send a different HSTS value while it shares the host.
+- hub:preflight FAILs on: APP_URL not exactly the constant, APP_URL's path ≠ FLIGHTHUB_BASE_PATH,
+  a route cache under a base path, SESSION_PATH ≠ the base path, a missing or refused
+  SESSION_COOKIE, and a public/.htaccess without the ea-php83 handler or DirectoryIndex.
 
 ## Database
 - Runtime user = default connection `mariadb`: data access only; NO UPDATE/DELETE on history
@@ -195,7 +220,8 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   introduction, one short line per field, no quality or correction information, no as_of or
   include_removed, no internal words (AODB, decision ids, group names, table or class names).
   resources/api/flighthub-v1.openapi.yaml is the complete INTERNAL document: not served, kept
-  for the contract tests and RAC IT. Every API change updates both; tests/Feature/ApiDocs
+  for the contract tests and RAC IT. Neither file holds an address: servers[0] = APP_URL + /api/v1
+  is set when a document is read (ApiDocsController::withServer). Every API change updates both; tests/Feature/ApiDocs
   check them against the routes, the field groups, the OpenAPI 3.1 meta-schema and real
   responses.
 - No response carries X-Powered-By (RemovePoweredBy, global middleware); production also sets
@@ -225,11 +251,12 @@ Never depends on KIA PULSE: own repo, database, subdomain (flightdata.rac.co.rw)
   nonce; no 'unsafe-eval', no 'unsafe-inline' (Livewire's CSP-safe build). No inline style
   attributes or event handlers in templates; the own scripts are public/js/hub.js (copy,
   .txt download, dialog focus / Escape, and ended sessions: a Livewire request answered 419
-  goes to /login?session=ended with the page's path, and signing in returns there) and
+  goes to /login?session=ended with the page's path, base path included; App\Admin\ReturnPath
+  accepts only a path under the base path and strips it, and signing in returns there) and
   public/js/api-docs.js (starts Swagger UI on /api/docs).
 - Security headers on every response, from the global SecurityHeaders middleware (outermost):
   nosniff, X-Frame-Options DENY, Referrer-Policy same-origin, Permissions-Policy, HSTS in
-  production; the CSP on HTML responses (the fallback 404 included). The prerendered
+  production (exactly KIA PULSE's value, D-061); the CSP on HTML responses (the fallback 404 included). The prerendered
   maintenance page (artisan down --render) is served before the application boots, so it
   carries only Retry-After (accepted, D-059).
 - Screen map (each route carries its ability; every Livewire screen re-checks it on every

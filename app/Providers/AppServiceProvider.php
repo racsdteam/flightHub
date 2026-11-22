@@ -9,6 +9,7 @@ use App\Aodb\FixtureAodbClient;
 use App\Aodb\HttpAodbClient;
 use App\Api\ApiResponses;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use Livewire\Features\SupportFileUploads\FilePreviewController;
@@ -41,6 +42,13 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         Abilities::register();
+
+        // D-061: every generated URL (pages, assets, Livewire, redirects, alert mails) comes from
+        // APP_URL, base path included (https://systems.rac.co.rw/flighthub), never from the
+        // request's Host header or scheme; https in production.
+        $root = rtrim((string) config('app.url'), '/');
+        URL::forceRootUrl($root);
+        URL::forceScheme($this->app->environment('production') ? 'https' : (parse_url($root, PHP_URL_SCHEME) ?: 'http'));
 
         // The stale-feed banner on every admin screen (D-041).
         View::composer('components.layouts.app', fn ($view) => $view->with('feed', auth()->check() ? ApiResponses::feed() : null));

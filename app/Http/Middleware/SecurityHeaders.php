@@ -45,6 +45,8 @@ class SecurityHeaders
         $response->headers->set('Referrer-Policy', 'same-origin');
         $response->headers->set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
         if (app()->environment('production')) {
+            // Exactly KIA PULSE's value: the hub shares systems.rac.co.rw with it (D-061) and must
+            // not send a different HSTS policy for the same host.
             $response->headers->set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
         }
 

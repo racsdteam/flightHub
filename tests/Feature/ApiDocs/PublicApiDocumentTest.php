@@ -130,10 +130,15 @@ class PublicApiDocumentTest extends PollTestCase
 
     public function test_the_served_document_has_one_server_the_configured_app_url(): void
     {
-        config(['app.url' => 'https://flightdata.example.test/']);
+        config(['app.url' => 'https://hub.example.test/']);
         $served = Yaml::parse($this->get('/api/openapi.yaml')->assertOk()->getContent());
 
-        $this->assertSame([['url' => 'https://flightdata.example.test/api/v1']], $served['servers']);
+        $this->assertSame([['url' => 'https://hub.example.test/api/v1']], $served['servers']);
+        $this->assertArrayNotHasKey('servers', Yaml::parse($this->file()), 'no address in the file (D-061)');
+
+        // Under the base path (D-061): APP_URL's path is part of the server.
+        config(['app.url' => 'https://systems.rac.co.rw/flighthub']);
+        $this->assertSame([['url' => 'https://systems.rac.co.rw/flighthub/api/v1']], Yaml::parse(ApiDocsController::served())['servers']);
         unset($served['servers']);
         $this->assertSame(Yaml::parse($this->file()), $served, 'otherwise exactly the committed file');
     }

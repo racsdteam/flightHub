@@ -30,6 +30,13 @@ class DeployScriptTest extends TestCase
 
     private const COMPOSER = 'php composer install --no-dev --optimize-autoloader --no-interaction ddl=no';
 
+    private const APP_URL = 'https://systems.rac.co.rw/flighthub';
+
+    private static function curl(string $url): string
+    {
+        return 'curl -sS --max-time 20 -b laravel_maintenance=BYPASSCOOKIE -D - -o /dev/null -w HTTP_CODE=%{http_code} '.$url;
+    }
+
     private string $dir;
 
     protected function setUp(): void
@@ -52,7 +59,12 @@ class DeployScriptTest extends TestCase
                 case "$2" in
                   *PHP_MAJOR_VERSION*) printf '%s' "${STUB_PHP_VERSION:-8.3}" ;;
                   *random_bytes*) printf 'f00df00df00df00df00df00df00df00d' ;;
-                  *app.url*) printf 'https://flightdata.rac.co.rw' ;;
+                  *'config($argv[1])'*)
+                    case "$3" in
+                      app.url) printf '%s' "${STUB_APP_URL-https://systems.rac.co.rw/flighthub}" ;;
+                      hub.base_path) printf '%s' "${STUB_BASE_PATH-/flighthub}" ;;
+                      *) echo "unexpected config key $3" >&2; exit 9 ;;
+                    esac ;;
                   *) echo "unexpected php -r" >&2; exit 9 ;;
                 esac ;;
               artisan)
@@ -98,14 +110,26 @@ class DeployScriptTest extends TestCase
               merge) exit 0 ;;
             esac
             SH);
+        // Headers on stdout (-D -), then the -w marker. The root answer sets the two web cookies;
+        // STUB_COOKIE replaces the XSRF-TOKEN line, STUB_BARE / STUB_LOCATION answer APP_URL itself.
         $this->stub('curl', <<<'SH'
             #!/bin/bash
             url="${@: -1}"
             echo "curl $*" >> "$STUB_LOG"
+            cookies=()
             case "$url" in
-              */api/v1/health) printf '%s' "${STUB_HEALTH:-401}" ;;
-              */) printf '%s' "${STUB_ROOT:-302}" ;;
+              */api/v1/health) code="${STUB_HEALTH:-401}" ;;
+              */)
+                code="${STUB_ROOT:-302}"
+                cookies=("${STUB_COOKIE-XSRF-TOKEN=Sentinel-cookie-value; expires=Sat, 22 Nov 2026 12:00:00 GMT; Max-Age=1800; path=/flighthub; secure; samesite=strict}"
+                  "flighthub_session=Sentinel-cookie-value; expires=Sat, 22 Nov 2026 12:00:00 GMT; Max-Age=1800; path=/flighthub; secure; httponly; samesite=strict") ;;
+              *) code="${STUB_BARE:-302}" ;;
             esac
+            printf 'HTTP/1.1 %s Stub\r\n' "$code"
+            [ -n "${STUB_LOCATION:-}" ] && [ "${url: -1}" != / ] && printf 'Location: %s\r\n' "$STUB_LOCATION"
+            for c in "${cookies[@]}"; do [ -n "$c" ] && printf 'Set-Cookie: %s\r\n' "$c"; done
+            printf '\r\n'
+            printf 'HTTP_CODE=%s' "$code"
             SH);
         $this->stub('pgrep', <<<'SH'
             #!/bin/bash
@@ -270,12 +294,12 @@ class DeployScriptTest extends TestCase
             'artisan hub:grants-sql ddl=yes',
             'artisan hub:reapply-corrections ddl=no',
             'artisan config:cache ddl=no',
-            'artisan route:cache ddl=no',
             'artisan view:cache ddl=no',
             'artisan event:cache ddl=no',
             'php bypass-cookie f00df00df00df00df00df00df00df00d ddl=no',
-            'curl -sS --max-time 20 -b laravel_maintenance=BYPASSCOOKIE -o /dev/null -w %{http_code} https://flightdata.rac.co.rw/',
-            'curl -sS --max-time 20 -b laravel_maintenance=BYPASSCOOKIE -o /dev/null -w %{http_code} https://flightdata.rac.co.rw/api/v1/health',
+            self::curl(self::APP_URL),
+            self::curl(self::APP_URL.'/'),
+            self::curl(self::APP_URL.'/api/v1/health'),
             'artisan hub:preflight ddl=yes',
             'artisan up ddl=no',
         ]);
@@ -286,10 +310,13 @@ class DeployScriptTest extends TestCase
         $this->assertStringContainsString("artisan'? hub:(poll|reapply-corrections|backfill)", $log[$pgrep]);
         $this->assertSame([], self::grep($log, '/^git pull/'));
 
-        // Caches: cleared, then built; never optimize:clear or cache:clear.
+        // Caches: cleared, then built; no route cache under /flighthub (D-061); never optimize:clear or cache:clear.
         $caches = self::grep(array_slice($log, self::index($log, 'artisan hub:reapply-corrections ddl=no')), '/^artisan (config|route|view|event):(clear|cache)|^artisan clear-compiled/');
-        $this->assertSame(['config:clear', 'route:clear', 'view:clear', 'event:clear', 'clear-compiled', 'config:cache', 'route:cache', 'view:cache', 'event:cache'],
+        $this->assertSame(['config:clear', 'route:clear', 'view:clear', 'event:clear', 'clear-compiled', 'config:cache', 'view:cache', 'event:cache'],
             array_map(fn ($l) => explode(' ', $l)[1], $caches));
+        $this->assertStringContainsString('No route cache: the hub is served under /flighthub (D-061).', $run['out']);
+        $this->assertStringContainsString('No cookie outside /flighthub.', $run['out']);
+        $this->assertStringNotContainsString('Sentinel-cookie-value', $run['out']);
         $this->assertSame([], self::grep($log, '/optimize:clear|artisan cache:clear/'));
         // Only the login check, migrate, grants-sql and the preflight ever saw the DDL password.
         $this->assertSame(['artisan hub:preflight --ddl-login ddl=yes', 'artisan migrate --database=mariadb_ddl --force ddl=yes', 'artisan hub:grants-sql ddl=yes', 'artisan hub:preflight ddl=yes'],
@@ -391,7 +418,7 @@ class DeployScriptTest extends TestCase
 
     public function test_a_failed_serving_check_leaves_maintenance_on_and_names_both_commits(): void
     {
-        foreach (['STUB_ROOT' => ['405', 'route-cache signature'], 'STUB_HEALTH' => ['200', 'do NOT lift maintenance']] as $variable => [$code, $hint]) {
+        foreach (['STUB_ROOT' => ['405', 'route-cache or DirectoryIndex signature'], 'STUB_BARE' => ['404', 'check the symlink'], 'STUB_HEALTH' => ['200', 'do NOT lift maintenance']] as $variable => [$code, $hint]) {
             $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, $variable => $code], stdin: "\n");
 
             $this->assertSame(1, $run['code']);
@@ -440,6 +467,86 @@ class DeployScriptTest extends TestCase
         $this->assertSame([], self::grep($run['log'], '/^(artisan (migrate|up)|git merge )/'));
     }
 
+    /**
+     * D1 (D-061): the route cache is cleared on every deploy and built only at a domain root (the
+     * subdomain move: FLIGHTHUB_BASE_PATH empty and APP_URL, nothing else).
+     */
+    public function test_the_route_cache_is_built_only_when_the_base_path_is_empty(): void
+    {
+        touch($this->dir.'/grants-applied');
+
+        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD]);
+        $this->assertSame(0, $run['code'], $run['out']);
+        $this->assertCount(1, self::grep($run['log'], '/^artisan route:clear/'));
+        $this->assertSame([], self::grep($run['log'], '/^artisan route:cache/'));
+
+        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'STUB_BASE_PATH' => '', 'STUB_APP_URL' => 'https://hub.example.test']);
+        $this->assertSame(0, $run['code'], $run['out']);
+        self::assertInOrder($run['log'], ['artisan route:clear ddl=no', 'artisan config:cache ddl=no', 'artisan route:cache ddl=no', 'artisan view:cache ddl=no']);
+        self::assertInOrder($run['log'], [self::curl('https://hub.example.test'), self::curl('https://hub.example.test/'), self::curl('https://hub.example.test/api/v1/health')]);
+        $this->assertStringNotContainsString('No route cache', $run['out']);
+        // At a domain root every cookie path is the hub's own.
+        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'STUB_BASE_PATH' => '', 'STUB_APP_URL' => 'https://hub.example.test', 'STUB_COOKIE' => 'XSRF-TOKEN=x; path=/']);
+        $this->assertSame(0, $run['code'], $run['out']);
+    }
+
+    /**
+     * D2: APP_URL may answer with the web server's slash redirect to APP_URL/, nothing else.
+     */
+    public function test_the_serving_check_accepts_only_the_slash_redirect_for_app_url_itself(): void
+    {
+        touch($this->dir.'/grants-applied');
+
+        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'STUB_BARE' => '301', 'STUB_LOCATION' => self::APP_URL.'/']);
+        $this->assertSame(0, $run['code'], $run['out']);
+        $this->assertStringContainsString(self::APP_URL.' answered 301 to '.self::APP_URL.'/ (the web server adds the slash).', $run['out']);
+
+        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'STUB_BARE' => '301', 'STUB_LOCATION' => 'https://systems.rac.co.rw/']);
+        $this->assertSame(1, $run['code']);
+        $this->assertStringContainsString('answered 301 to another address', $run['out']);
+        $this->assertStringContainsString('✗ DEPLOY FAILED during: Serving check', $run['out']);
+        $this->assertSame([], self::grep($run['log'], '/^artisan up/'));
+    }
+
+    /**
+     * D2: no Set-Cookie with a path outside the base path (KIA PULSE shares the host). The message
+     * names the cookie and its path, never its value.
+     */
+    public function test_a_cookie_outside_the_base_path_fails_the_serving_check(): void
+    {
+        touch($this->dir.'/grants-applied');
+
+        foreach (['XSRF-TOKEN=Sentinel-cookie-value; path=/; secure' => 'XSRF-TOKEN (path=/)',
+            'XSRF-TOKEN=Sentinel-cookie-value; secure; samesite=strict' => 'XSRF-TOKEN (path=none)',
+            'XSRF-TOKEN=Sentinel-cookie-value; path=/flighthubx' => 'XSRF-TOKEN (path=/flighthubx)',
+            'XSRF-TOKEN=Sentinel-cookie-value; Path=/pulse; secure' => 'XSRF-TOKEN (path=/pulse)'] as $cookie => $named) {
+            $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'STUB_COOKIE' => $cookie]);
+
+            $this->assertSame(1, $run['code'], $cookie);
+            $this->assertStringContainsString('✗ '.self::APP_URL.'/ set a cookie outside /flighthub: '.$named, $run['out']);
+            $this->assertStringContainsString('SESSION_PATH=/flighthub and SESSION_COOKIE=flighthub_session', $run['out']);
+            $this->assertStringContainsString('✗ DEPLOY FAILED during: Serving check', $run['out']);
+            $this->assertStringNotContainsString('Sentinel-cookie-value', $run['out']);
+            $this->assertSame([], self::grep($run['log'], '/^artisan (hub:preflight ddl|up)/'));
+        }
+
+        // A path under the base path is the hub's own.
+        $run = $this->deploy(['FLIGHTHUB_DB_DDL_PASSWORD' => self::DDL_PASSWORD, 'STUB_COOKIE' => 'XSRF-TOKEN=x; path=/flighthub/quality']);
+        $this->assertSame(0, $run['code'], $run['out']);
+    }
+
+    /**
+     * The cron line's flock file (docs/DEPLOY.md, D-061) is ignored by git: deploy.sh refuses a
+     * working tree that is not clean, untracked files included.
+     */
+    public function test_the_cron_lock_file_keeps_the_working_tree_clean(): void
+    {
+        $process = new Process(['git', 'check-ignore', '-q', 'storage/framework/schedule.lock'], base_path());
+        $process->run();
+
+        $this->assertSame(0, $process->getExitCode(), 'storage/framework/schedule.lock must be git-ignored');
+    }
+
     public function test_a_dirty_tree_a_wrong_remote_or_php_refuse_before_anything(): void
     {
         foreach ([['STUB_DIRTY' => '1'], ['STUB_REMOTE' => 'https://github.com/racsdteam/flightHub.git'], ['STUB_PHP_VERSION' => '8.4']] as $env) {
@@ -463,6 +570,8 @@ class DeployScriptTest extends TestCase
         sort($sorted);
         $this->assertSame($sorted, $positions);
         $this->assertStringContainsString('git merge --ff-only TARGET', $run['out']);
+        $this->assertStringContainsString('route:cache only when hub.base_path is empty (never under /flighthub, D-061)', $run['out']);
+        $this->assertStringContainsString("from config('app.url')", $run['out']);
         $this->assertSame([], $run['log']);
     }
 }

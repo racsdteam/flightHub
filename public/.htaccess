@@ -1,3 +1,17 @@
+# php -- BEGIN cPanel-generated handler, do not edit
+# Set the "ea-php83" package as the default "PHP" programming language.
+<IfModule mime_module>
+  AddHandler application/x-httpd-ea-php83 .php .php8 .phtml
+</IfModule>
+# php -- END cPanel-generated handler, do not edit
+
+# RAC Flight Data Hub (D-061): served at systems.rac.co.rw/flighthub, where public_html/flighthub
+# is a symlink to this folder. The block above runs PHP 8.3 for this folder only (the account's
+# default is 8.2 and its MultiPHP setting is never changed); hub:preflight checks it is here.
+# Without DirectoryIndex, /flighthub/ is a directory request that skips the front controller
+# (405); hub:preflight checks it too.
+DirectoryIndex index.php
+
 <IfModule mod_rewrite.c>
     <IfModule mod_negotiation.c>
         Options -MultiViews -Indexes
@@ -5,7 +19,7 @@
 
     RewriteEngine On
 
-    # Handle Authorization Header
+    # Handle Authorization Header (the distribution API's Bearer keys depend on it)
     RewriteCond %{HTTP:Authorization} .
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 

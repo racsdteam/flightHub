@@ -25,7 +25,17 @@ final class Preflight
 
     public const SKIPPED = 'skipped';
 
-    public const APP_URL = 'https://flightdata.rac.co.rw';
+    /**
+     * Where the hub is served (D-061), exactly. The one constant the move to a subdomain changes
+     * (with FLIGHTHUB_BASE_PATH empty and SESSION_PATH=/).
+     */
+    public const APP_URL = 'https://systems.rac.co.rw/flighthub';
+
+    /** Session cookie names the hub must not use: Laravel's default and KIA PULSE's (same host). */
+    public const REFUSED_SESSION_COOKIES = ['laravel_session', 'kia_pulse_session'];
+
+    /** cPanel's per-directory handler line in public/.htaccess (the account's default PHP is 8.2). */
+    public const HTACCESS_HANDLER = 'AddHandler application/x-httpd-ea-php83 .php .php8 .phtml';
 
     /** Written every minute by the scheduler (routes/console.php), also in maintenance mode. */
     public const HEARTBEAT_KEY = 'hub.scheduler_heartbeat';
@@ -60,6 +70,7 @@ final class Preflight
         $this->results = [];
         $this->php();
         $this->application();
+        $this->basePath();
         $this->requiredKeys();
         $this->ddlSecrets();
         $this->database();
@@ -86,8 +97,27 @@ final class Preflight
         $this->check('APP_ENV is production', fn () => app()->environment('production'));
         $this->check('APP_DEBUG is off', fn () => config('app.debug') === false);
         $this->check('APP_KEY is set', fn () => (string) config('app.key') !== '');
-        $this->check('APP_URL is '.self::APP_URL, fn () => rtrim((string) config('app.url'), '/') === self::APP_URL);
+        $this->check('APP_URL is '.self::APP_URL, fn () => config('app.url') === self::APP_URL);
         $this->check('display_errors is off', fn () => ! self::on($this->probe->ini('display_errors')));
+    }
+
+    /**
+     * D-061: served under a path of a host shared with KIA PULSE and other apps. The base path is
+     * APP_URL's path; no route cache under a base path (405 on the base path, as KIA PULSE found);
+     * the cookies stay under the base path with the hub's own session cookie name; public/.htaccess
+     * runs PHP 8.3 and has DirectoryIndex.
+     */
+    private function basePath(): void
+    {
+        $base = (string) config('hub.base_path');
+        $this->check('APP_URL path is FLIGHTHUB_BASE_PATH', fn () => rtrim((string) parse_url((string) config('app.url'), PHP_URL_PATH), '/') === $base);
+        $this->check('no route cache under a base path', fn () => $base === '' || ! $this->probe->routesCached());
+        $this->check('SESSION_PATH is the base path', fn () => config('session.path') === ($base === '' ? '/' : $base));
+        $this->check('SESSION_COOKIE is set, not '.implode(' or ', self::REFUSED_SESSION_COOKIES), fn () => $this->probe->envFileHasValue('SESSION_COOKIE')
+            && ! in_array(strtolower(trim((string) config('session.cookie'))), self::REFUSED_SESSION_COOKIES, true));
+        $lines = array_map('trim', preg_split('/\R/', (string) $this->probe->htaccess()) ?: []);
+        $this->check('public/.htaccess sets the ea-php83 handler', in_array(self::HTACCESS_HANDLER, $lines, true));
+        $this->check('public/.htaccess has DirectoryIndex index.php', in_array('DirectoryIndex index.php', $lines, true));
     }
 
     private function requiredKeys(): void

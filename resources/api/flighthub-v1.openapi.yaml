@@ -138,11 +138,6 @@ info:
     (422), `RATE_LIMITED` (429), `SERVER_ERROR` (500).
 
     Every call is logged (consumer, path, parameters, status, time), never the key.
-servers:
-  - url: https://flightdata.rac.co.rw/api/v1
-    description: Production
-  - url: http://127.0.0.1:8000/api/v1
-    description: Local testing (php artisan serve)
 security:
   - apiKey: []
 tags:

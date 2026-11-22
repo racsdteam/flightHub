@@ -39,6 +39,9 @@ class PreflightTest extends PollTestCase
         config([
             'app.debug' => false,
             'app.url' => Preflight::APP_URL,
+            'hub.base_path' => '/flighthub',
+            'session.path' => '/flighthub',
+            'session.cookie' => 'flighthub_session',
             'session.secure' => true,
             'aodb.client' => 'http',
             'mail.default' => 'smtp',
@@ -78,6 +81,8 @@ class PreflightTest extends PollTestCase
         $this->assertArrayHasKey('PHP extension mbstring', $results);
         $this->assertArrayHasKey('no pending migrations', $results);
         $this->assertArrayHasKey('every append-only table has both its triggers', $results);
+        // The committed public/.htaccess passes (the fake reads the real file unless a test sets one).
+        $this->assertSame(['pass', 'pass'], [$results['public/.htaccess sets the ea-php83 handler'], $results['public/.htaccess has DirectoryIndex index.php']]);
     }
 
     /**
@@ -87,7 +92,9 @@ class PreflightTest extends PollTestCase
     {
         $names = [
             'PHP 8.3.x', 'PHP extension mbstring', 'PHP extension pdo_mysql', 'APP_ENV is production', 'APP_DEBUG is off', 'APP_KEY is set',
-            'APP_URL is https://flightdata.rac.co.rw', 'display_errors is off', 'DB_CONNECTION is mariadb', 'DB_PASSWORD is set', 'AODB_CLIENT is http',
+            'APP_URL is https://systems.rac.co.rw/flighthub', 'APP_URL path is FLIGHTHUB_BASE_PATH', 'no route cache under a base path',
+            'SESSION_PATH is the base path', 'SESSION_COOKIE is set, not laravel_session or kia_pulse_session',
+            'public/.htaccess sets the ea-php83 handler', 'public/.htaccess has DirectoryIndex index.php', 'display_errors is off', 'DB_CONNECTION is mariadb', 'DB_PASSWORD is set', 'AODB_CLIENT is http',
             'AODB_PASSWORD is set', 'MAIL_MAILER is smtp', 'MAIL_FROM_ADDRESS is set', 'no DDL password in .env', 'no DDL password in the config cache',
             'runtime database connection', 'hub:check-grants', 'session cookie is Secure', 'session lifetime is 30 minutes', 'storage/ is writable',
             'bootstrap/cache/ is writable', 'TLS certificate of APP_URL is valid', 'config cache matches .env', 'route cache matches the routes',
@@ -107,7 +114,14 @@ class PreflightTest extends PollTestCase
             'APP_ENV is production' => $this->app['env'] = 'local',
             'APP_DEBUG is off' => config(['app.debug' => true]),
             'APP_KEY is set' => config(['app.key' => '']),
-            'APP_URL is https://flightdata.rac.co.rw' => config(['app.url' => 'https://flightdata.example.org']),
+            // Not exactly: a trailing slash, the domain root, another host.
+            'APP_URL is https://systems.rac.co.rw/flighthub' => config(['app.url' => 'https://systems.rac.co.rw/flighthub/']),
+            'APP_URL path is FLIGHTHUB_BASE_PATH' => config(['hub.base_path' => '/hub']),
+            'no route cache under a base path' => [$this->probe->routes = true, $this->probe->fresh = ['config' => '', 'routes' => Preflight::routeFingerprint()]],
+            'SESSION_PATH is the base path' => config(['session.path' => '/']),
+            'SESSION_COOKIE is set, not laravel_session or kia_pulse_session' => $this->probe->envFile['SESSION_COOKIE'] = false,
+            'public/.htaccess sets the ea-php83 handler' => $this->probe->htaccess = str_replace('x-httpd-ea-php83', 'x-httpd-ea-php82', (string) file_get_contents(public_path('.htaccess'))),
+            'public/.htaccess has DirectoryIndex index.php' => $this->probe->htaccess = str_replace("\nDirectoryIndex index.php\n", "\n# DirectoryIndex index.php\n", (string) file_get_contents(public_path('.htaccess'))),
             'display_errors is off' => $this->probe->ini['display_errors'] = 'On',
             'DB_CONNECTION is mariadb' => config(['database.default' => 'sqlite']),
             'DB_PASSWORD is set' => $this->probe->envFile['DB_PASSWORD'] = false,
@@ -145,9 +159,38 @@ class PreflightTest extends PollTestCase
         $this->probe->routes = true;
         $this->probe->fresh = ['config' => Preflight::configFingerprint($fresh), 'routes' => Preflight::routeFingerprint()];
 
-        $results = $this->preflight(0);
+        // Under /flighthub a route cache FAILs however well it matches (D-061)…
+        $results = $this->preflight(1);
+        $this->assertSame(['pass', 'pass', 'FAIL'], [$results['config cache matches .env'], $results['route cache matches the routes'], $results['no route cache under a base path']]);
 
-        $this->assertSame(['pass', 'pass'], [$results['config cache matches .env'], $results['route cache matches the routes']]);
+        // …and at a domain root (the subdomain move) it is allowed.
+        config(['hub.base_path' => '', 'session.path' => '/', 'app.url' => 'https://hub.example.test']);
+        $results = $this->preflight(1);
+        $this->assertSame(['pass', 'pass', 'pass', 'pass', 'pass'], [$results['config cache matches .env'], $results['route cache matches the routes'],
+            $results['no route cache under a base path'], $results['APP_URL path is FLIGHTHUB_BASE_PATH'], $results['SESSION_PATH is the base path']]);
+        $this->assertSame('FAIL', $results['APP_URL is '.Preflight::APP_URL], 'the one constant the move changes');
+    }
+
+    /**
+     * D3: SESSION_COOKIE must be set in .env and be neither Laravel's default nor KIA PULSE's.
+     */
+    public function test_the_session_cookie_name_must_be_the_hubs_own(): void
+    {
+        foreach (['laravel_session', 'kia_pulse_session', 'KIA_PULSE_SESSION'] as $name) {
+            config(['session.cookie' => $name]);
+            $this->assertSame('FAIL', $this->preflight(1)['SESSION_COOKIE is set, not laravel_session or kia_pulse_session'], $name);
+        }
+        config(['session.cookie' => 'flighthub_session']);
+        $this->assertSame('pass', $this->preflight(0)['SESSION_COOKIE is set, not laravel_session or kia_pulse_session']);
+    }
+
+    public function test_app_url_must_be_exactly_the_constant(): void
+    {
+        foreach (['https://systems.rac.co.rw', 'http://systems.rac.co.rw/flighthub', 'https://systems.rac.co.rw/flighthub/', 'https://other.rac.co.rw/flighthub'] as $url) {
+            config(['app.url' => $url]);
+            $this->assertSame('FAIL', $this->preflight(1)['APP_URL is https://systems.rac.co.rw/flighthub'], $url);
+        }
+        $this->assertSame('https://systems.rac.co.rw/flighthub', Preflight::APP_URL);
     }
 
     public function test_warnings_do_not_fail(): void
@@ -276,6 +319,7 @@ class FakeProbe extends Probe
         'AODB_USERNAME' => true, 'AODB_PASSWORD' => true,
         'MAIL_HOST' => true, 'MAIL_PORT' => true, 'MAIL_USERNAME' => true, 'MAIL_PASSWORD' => true, 'MAIL_FROM_ADDRESS' => true,
         'DB_DDL_PASSWORD' => false,
+        'SESSION_COOKIE' => true,
     ];
 
     public ?array $cached = null;
@@ -298,6 +342,9 @@ class FakeProbe extends Probe
     public ?int $pending = null;
 
     public ?array $missingTriggers = null;
+
+    /** public/.htaccess: the committed file unless set. */
+    public ?string $htaccess = null;
 
     public function __construct()
     {
@@ -337,6 +384,11 @@ class FakeProbe extends Probe
     public function routesCached(): bool
     {
         return $this->routes;
+    }
+
+    public function htaccess(): ?string
+    {
+        return $this->htaccess ?? parent::htaccess();
     }
 
     public function freshFingerprints(): ?array

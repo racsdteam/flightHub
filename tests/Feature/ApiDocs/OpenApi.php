@@ -19,7 +19,8 @@ class OpenApi
 {
     public const FILE = ApiDocsController::INTERNAL_DOCUMENT;
 
-    public const ID = 'https://flightdata.rac.co.rw/internal/flighthub-v1.openapi.yaml';
+    /** The schema resource's id (a name for opis, never fetched; .invalid never resolves). */
+    public const ID = 'https://flighthub.invalid/internal/flighthub-v1.openapi.yaml';
 
     protected static ?object $document = null;
 

@@ -22,7 +22,7 @@ class ApiDocsPageTest extends TestCase
         $this->assertGuest();
         $this->assertSame([], $response->headers->getCookies(), 'no session or XSRF cookie');
         $response->assertSee('id="swagger-ui"', false);
-        $response->assertSee('data-spec-url="/api/openapi.yaml"', false);
+        $response->assertSee('data-spec-url="'.route('api.openapi').'"', false);
         $this->assertNotContains('web', Route::getRoutes()->getByName('api.docs')->gatherMiddleware());
         $this->assertNotContains('web', Route::getRoutes()->getByName('api.openapi')->gatherMiddleware());
         $this->assertSame(0, DB::table('api_calls')->count(), 'reading the documentation is not an API call');
@@ -32,13 +32,20 @@ class ApiDocsPageTest extends TestCase
     {
         $html = $this->get('/api/docs')->getContent();
 
-        $this->assertDoesNotMatchRegularExpression('#(https?:)?//#', $html, 'no absolute or protocol-relative URL');
+        // Every address is the hub's own, from APP_URL (D-061: base path included), never root-absolute.
+        $own = rtrim(url('/'), '/');
+        preg_match_all('#(?:https?:)?//[^\s"\'<>]+#', $html, $absolute);
+        foreach ($absolute[0] as $address) {
+            $this->assertTrue($address === $own || str_starts_with($address, $own.'/'), "outside URL: {$address}");
+        }
+        $this->assertDoesNotMatchRegularExpression('/(?:href|src|data-spec-url)="\/(?!\/)/', $html, 'no root-absolute URL');
         preg_match_all('/<script\b[^>]*>/', $html, $scripts);
         preg_match_all('/<(?:link|script)\b[^>]*(?:href|src)="([^"]+)"/', $html, $assets);
-        $this->assertSame(['/images/favicon-32.png', '/images/apple-touch-icon-180.png', '/css/hub.css', '/vendor/swagger-ui/swagger-ui.css', '/vendor/swagger-ui/swagger-ui-bundle.js', '/js/api-docs.js'], $assets[1]);
-        $this->assertStringContainsString('<img src="/images/rac-logo-80.png" width="40" height="40" alt="Rwanda Airports Company">', $html, 'the RAC logo (D-053)');
-        foreach ($assets[1] as $asset) {
-            $this->assertFileExists(public_path(ltrim($asset, '/')));
+        $files = ['images/favicon-32.png', 'images/apple-touch-icon-180.png', 'css/hub.css', 'vendor/swagger-ui/swagger-ui.css', 'vendor/swagger-ui/swagger-ui-bundle.js', 'js/api-docs.js'];
+        $this->assertSame(array_map(fn ($file) => asset($file), $files), $assets[1]);
+        $this->assertStringContainsString('<img src="'.asset('images/rac-logo-80.png').'" width="40" height="40" alt="Rwanda Airports Company">', $html, 'the RAC logo (D-053)');
+        foreach ($files as $file) {
+            $this->assertFileExists(public_path($file));
         }
         foreach ($scripts[0] as $tag) {
             $this->assertStringContainsString(' src="', $tag, 'no inline script');

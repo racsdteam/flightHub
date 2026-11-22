@@ -3,9 +3,11 @@
 namespace Tests\Feature\ApiDocs;
 
 use App\Collector\FlightNormaliser;
+use App\Http\Controllers\ApiDocsController;
 use Illuminate\Support\Facades\Route;
 use Opis\JsonSchema\CompliantValidator;
 use Opis\JsonSchema\Errors\ErrorFormatter;
+use Symfony\Component\Yaml\Yaml;
 use Tests\TestCase;
 use Throwable;
 
@@ -32,10 +34,10 @@ class OpenApiDocumentTest extends TestCase
 
         $this->assertMatchesRegularExpression('/^3\.1\.\d+$/', $doc['openapi']);
         $this->assertSame(['RAC Flight Data Hub API', '1.0.0'], [$doc['info']['title'], $doc['info']['version']]);
-        $this->assertSame(
-            ['https://flightdata.rac.co.rw/api/v1', 'http://127.0.0.1:8000/api/v1'],
-            array_column($doc['servers'], 'url'),
-        );
+        // No address in the file: servers[0] is APP_URL + /api/v1, set when the document is read (D-061).
+        $this->assertArrayNotHasKey('servers', $doc);
+        config(['app.url' => 'https://systems.rac.co.rw/flighthub']);
+        $this->assertSame([['url' => 'https://systems.rac.co.rw/flighthub/api/v1']], Yaml::parse(ApiDocsController::withServer(ApiDocsController::INTERNAL_DOCUMENT))['servers']);
         $this->assertSame(['type' => 'http', 'scheme' => 'bearer'], array_intersect_key($doc['components']['securitySchemes']['apiKey'], ['type' => 1, 'scheme' => 1]));
         $this->assertStringStartsWith('fdh_', $doc['components']['securitySchemes']['apiKey']['bearerFormat']);
         $this->assertSame([['apiKey' => []]], $doc['security']);

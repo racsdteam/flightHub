@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# RAC Flight Data Hub — deploy to flightdata.rac.co.rw (D-049, D-056). Runbook: docs/DEPLOY.md.
+# RAC Flight Data Hub — deploy to https://systems.rac.co.rw/flighthub (D-049, D-056, D-061).
+# Runbook: docs/DEPLOY.md.
 #
 # Run ON the server, in cPanel Terminal, as the account user sysrac — never root:
 #
@@ -53,6 +54,11 @@ DDL_PASS=""
 TARGET=""
 PREVIOUS=""
 BYPASS_VALUE=""
+BYPASS_COOKIE=""
+SERVED_BASE_PATH=""
+HTTP_CODE=""
+HTTP_LOCATION=""
+BAD_COOKIES=""
 FIRST_INSTALL="no"
 FILES_CHANGED="no"
 
@@ -193,15 +199,23 @@ scripts/deploy.sh --dry-run: the steps of a deploy (nothing is run).
   7. Grants          hub:check-grants; when they differ: hub:grants-sql (DDL prefix) to
                      $DEPLOY_DIR/grants-<time>.sql (mode 600), pause until run as root, check again
   8. Re-apply        artisan hub:reapply-corrections
-  9. Caches          config/route/view/event:clear, clear-compiled; config/route/view/event:cache
+  9. Caches          config/route/view/event:clear, clear-compiled; config/view/event:cache;
+                     route:cache only when hub.base_path is empty (never under /flighthub, D-061)
                      (never optimize:clear or cache:clear)
- 10. Serving check   through APP_URL with the bypass cookie: GET / → 200|302, GET /api/v1/health → 401
+ 10. Serving check   from config('app.url'), with the bypass cookie: APP_URL → 200|302 (or 301 to
+                     APP_URL/), APP_URL/ → 200|302, APP_URL/api/v1/health → 401; no Set-Cookie
+                     with a path outside the base path
  11. Preflight       DB_DDL_USERNAME=… DB_DDL_PASSWORD=… artisan hub:preflight (with the DDL checks)
  12. Up              artisan up
 
   First install (no vendor/, nothing live): update code (git merge --ff-only TARGET) →
   composer install → DDL login → maintenance → running jobs → 5 to 12 above.
 STEPS
+}
+
+# One value of the application's config, as it will be served (the config cache once built).
+app_config() {
+    "$PHP" -r 'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); echo (string) config($argv[1]);' "$1"
 }
 
 ddl_login() {
@@ -369,6 +383,131 @@ wait_for_jobs() {
     echo "  No job running."
 }
 
+# One request through the web server with the bypass cookie. Sets HTTP_CODE, HTTP_LOCATION and
+# BAD_COOKIES: every Set-Cookie whose Path is not the base path or under it (KIA PULSE and three
+# other apps share the host, D-061), named with its path, never its value.
+fetch() {
+    local out headers line lower name path
+    out="$(curl -sS --max-time 20 -b "laravel_maintenance=$BYPASS_COOKIE" -D - -o /dev/null -w 'HTTP_CODE=%{http_code}' "$1" 2>/dev/null || true)"
+    case "$out" in
+        *HTTP_CODE=*) HTTP_CODE="${out##*HTTP_CODE=}"; headers="${out%HTTP_CODE=*}" ;;
+        *) HTTP_CODE=""; headers="" ;;
+    esac
+    HTTP_CODE="${HTTP_CODE:-000}"
+    HTTP_LOCATION=""
+    BAD_COOKIES=""
+    while IFS= read -r line; do
+        line="${line%$'\r'}"
+        lower="$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
+        case "$lower" in
+            location:*)
+                HTTP_LOCATION="${line#*:}"
+                HTTP_LOCATION="${HTTP_LOCATION# }"
+                ;;
+            set-cookie:*)
+                name="${line#*:}"
+                name="${name# }"
+                name="${name%%=*}"
+                path="$(printf '%s' "$line" | sed -n 's/.*;[[:space:]]*[Pp][Aa][Tt][Hh]=\([^;]*\).*/\1/p')"
+                path="${path%"${path##*[![:space:]]}"}"
+                if [ -n "$SERVED_BASE_PATH" ] && [ "$path" != "$SERVED_BASE_PATH" ] && [ "${path#"$SERVED_BASE_PATH"/}" = "$path" ]; then
+                    BAD_COOKIES="$BAD_COOKIES $name (path=${path:-none})"
+                fi
+                ;;
+        esac
+    done <<HEADERS
+$headers
+HEADERS
+}
+
+# The answer of one URL must set no cookie outside the base path.
+check_cookies() {
+    if [ -n "$BAD_COOKIES" ]; then
+        echo "" >&2
+        echo "✗ $1 set a cookie outside $SERVED_BASE_PATH:$BAD_COOKIES" >&2
+        echo "  The hub's cookies must stay under its base path (KIA PULSE and other apps share the host):" >&2
+        echo "  SESSION_PATH=$SERVED_BASE_PATH and SESSION_COOKIE=flighthub_session in .env (docs/DEPLOY.md step 5)." >&2
+        exit 1
+    fi
+}
+
+root_hint() {
+    case "$1" in
+        405) echo "  405 is the route-cache or DirectoryIndex signature: under a base path there must be no route" >&2
+             echo "  cache ($PHP artisan route:clear), and public/.htaccess needs DirectoryIndex index.php." >&2 ;;
+        404) echo "  404 means the web server has nothing at this address: check the symlink" >&2
+             echo "  public_html$SERVED_BASE_PATH → $APP_DIR/public (docs/DEPLOY.md steps 1 and 4)." >&2 ;;
+        500) echo "  500 means the application failed while serving: read storage/logs/laravel.log." >&2 ;;
+        503) echo "  503 means the bypass cookie was refused: the request met the maintenance page." >&2 ;;
+        000) echo "  000 means the request never completed: DNS, TLS or the web server, not the application." >&2 ;;
+    esac
+}
+
+# A real request through the web server, before anybody else can make one: the CLI checks never
+# ask the web server anything. Every address comes from config('app.url') (APP_URL, base path
+# included). The bypass is a cookie made by the framework's own MaintenanceModeBypassCookie (KIA
+# PULSE's approach; `down --secret`'s /<secret> address does not work under a base path): the
+# prerendered 503 page and the middleware both accept it, whatever the path.
+serving_check() {
+    local live_url
+    live_url="$(app_config app.url)"
+    live_url="${live_url%/}"
+    SERVED_BASE_PATH="$(app_config hub.base_path)"
+    BYPASS_COOKIE="$("$PHP" scripts/maintenance-bypass-cookie.php "$BYPASS_VALUE")"
+
+    # APP_URL itself: the web server may first add the slash (mod_dir: 301 to APP_URL/).
+    fetch "$live_url"
+    case "$HTTP_CODE" in
+        200|302) echo "  $live_url answered $HTTP_CODE." ;;
+        301|308)
+            if [ "$HTTP_LOCATION" = "$live_url/" ]; then
+                echo "  $live_url answered $HTTP_CODE to $live_url/ (the web server adds the slash)."
+            else
+                echo "" >&2
+                echo "✗ $live_url answered $HTTP_CODE to another address; expected 200, 302, or a redirect to $live_url/." >&2
+                exit 1
+            fi
+            ;;
+        *)
+            echo "" >&2
+            echo "✗ $live_url answered $HTTP_CODE through the web server, after the caches were rebuilt." >&2
+            root_hint "$HTTP_CODE"
+            exit 1
+            ;;
+    esac
+    check_cookies "$live_url"
+
+    fetch "$live_url/"
+    case "$HTTP_CODE" in
+        200|302) echo "  $live_url/ answered $HTTP_CODE: the application is serving." ;;
+        *)
+            echo "" >&2
+            echo "✗ $live_url/ answered $HTTP_CODE through the web server, after the caches were rebuilt." >&2
+            root_hint "$HTTP_CODE"
+            exit 1
+            ;;
+    esac
+    check_cookies "$live_url/"
+
+    fetch "$live_url/api/v1/health"
+    if [ "$HTTP_CODE" != "401" ]; then
+        echo "" >&2
+        echo "✗ $live_url/api/v1/health without a key answered $HTTP_CODE; expected 401 (the API refuses a call with no key)." >&2
+        case "$HTTP_CODE" in
+            200) echo "  200 without a key means the API is not checking keys: do NOT lift maintenance." >&2 ;;
+            404) echo "  404 means the API routes are missing (routes/api.php, bootstrap/app.php)." >&2 ;;
+            500) echo "  500 means the application failed while serving: read storage/logs/laravel.log." >&2 ;;
+            000) echo "  000 means the request never completed: DNS, TLS or the web server, not the application." >&2 ;;
+        esac
+        exit 1
+    fi
+    check_cookies "$live_url/api/v1/health"
+    echo "  $live_url/api/v1/health answered 401 without a key, as it must."
+    if [ -n "$SERVED_BASE_PATH" ]; then
+        echo "  No cookie outside $SERVED_BASE_PATH."
+    fi
+}
+
 main() {
     case "${1:-}" in
         --dry-run) dry_run; exit 0 ;;
@@ -431,7 +570,9 @@ main() {
     "$PHP" artisan hub:reapply-corrections
 
     step "Caches"
-    # CLEAR, THEN BUILD. Route cache allowed: the hub is served at the subdomain root (D-011).
+    # CLEAR, THEN BUILD. The route cache is cleared always and built only when the hub is served
+    # at a domain root: under a base path (/flighthub, D-061) a route cache answers 405 on the
+    # base path, as KIA PULSE found under /pulse.
     # NOT optimize:clear and NOT cache:clear: they empty the cache store, which holds the
     # scheduler locks, the rate limits, the AODB token and the AODB pause state.
     "$PHP" artisan config:clear
@@ -440,48 +581,18 @@ main() {
     "$PHP" artisan event:clear
     "$PHP" artisan clear-compiled
     "$PHP" artisan config:cache
-    "$PHP" artisan route:cache
+    local base_path
+    base_path="$(app_config hub.base_path)"
+    if [ -z "$base_path" ]; then
+        "$PHP" artisan route:cache
+    else
+        echo "  No route cache: the hub is served under $base_path (D-061)."
+    fi
     "$PHP" artisan view:cache
     "$PHP" artisan event:cache
 
     step "Serving check"
-    # A real request through the web server, before anybody else can make one: the CLI checks
-    # above never ask the web server anything. The bypass is a cookie made by the framework's
-    # own MaintenanceModeBypassCookie (KIA PULSE's approach): the prerendered 503 page and the
-    # middleware both accept it, whatever the path.
-    local live_url bypass root health
-    live_url="$("$PHP" -r 'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); echo rtrim((string) config("app.url"), "/");')"
-    bypass="$("$PHP" scripts/maintenance-bypass-cookie.php "$BYPASS_VALUE")"
-    root="$(curl -sS --max-time 20 -b "laravel_maintenance=$bypass" -o /dev/null -w '%{http_code}' "$live_url/" 2>/dev/null || true)"
-    health="$(curl -sS --max-time 20 -b "laravel_maintenance=$bypass" -o /dev/null -w '%{http_code}' "$live_url/api/v1/health" 2>/dev/null || true)"
-    root="${root:-000}"
-    health="${health:-000}"
-    case "$root" in
-        200|302) echo "  $live_url/ answered $root: the application is serving." ;;
-        *)
-            echo "" >&2
-            echo "✗ $live_url/ answered $root through the web server, after the caches were rebuilt." >&2
-            case "$root" in
-                405) echo "  405 on / is the route-cache signature: $PHP artisan route:clear, then investigate." >&2 ;;
-                500) echo "  500 means the application failed while serving: read storage/logs/laravel.log." >&2 ;;
-                503) echo "  503 means the bypass cookie was refused: the request met the maintenance page." >&2 ;;
-                000) echo "  000 means the request never completed: DNS, TLS or the web server, not the application." >&2 ;;
-            esac
-            exit 1
-            ;;
-    esac
-    if [ "$health" != "401" ]; then
-        echo "" >&2
-        echo "✗ $live_url/api/v1/health without a key answered $health; expected 401 (the API refuses a call with no key)." >&2
-        case "$health" in
-            200) echo "  200 without a key means the API is not checking keys: do NOT lift maintenance." >&2 ;;
-            404) echo "  404 means the API routes are missing (routes/api.php, bootstrap/app.php)." >&2 ;;
-            500) echo "  500 means the application failed while serving: read storage/logs/laravel.log." >&2 ;;
-            000) echo "  000 means the request never completed: DNS, TLS or the web server, not the application." >&2 ;;
-        esac
-        exit 1
-    fi
-    echo "  $live_url/api/v1/health answered 401 without a key, as it must."
+    serving_check
 
     step "Preflight"
     if ! DB_DDL_USERNAME="$DDL_USER" DB_DDL_PASSWORD="$DDL_PASS" "$PHP" artisan hub:preflight; then
